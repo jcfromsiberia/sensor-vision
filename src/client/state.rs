@@ -4,7 +4,8 @@ use regex::Regex;
 
 use signals2::{Connect1, Emit1};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Sub;
 use std::sync::{Arc, RwLock, Weak};
 
 use uuid::Uuid;
@@ -155,15 +156,13 @@ pub enum SensorStateEvent {
     SensorUpdated {
         sensor_id: Uuid,
     },
-    MetricsUpdated {
-        sensor_id: Uuid,
-    },
 
     SensorDeleted {
         sensor_id: Uuid,
     },
-    MetricsDeleted {
+    MetricDeleted {
         sensor_id: Uuid,
+        metric_id: Uuid,
     },
 
     SensorNameChanged {
@@ -287,6 +286,13 @@ impl SensorState {
             .insert(self.full_topic(&response_topic), Box::new(ok_callback));
     }
 
+    fn unassign_callback(&mut self, action: &MqttRequest) {
+        let (_, response_topic, error_topic) = action.get_topics();
+        self.topic_callbacks
+            .remove(&self.full_topic(&response_topic));
+        self.topic_callbacks.remove(&self.full_topic(&error_topic));
+    }
+
     fn subscribe_to_sensor_events(&mut self, sensor_id: &Uuid) {
         self.assign_callback(
             &MqttRequest::SensorUpdate(&sensor_id),
@@ -315,7 +321,25 @@ impl SensorState {
             Self::cb_event_push_values,
         );
 
-        // TODO Subscribe for livedata here
+        let livedata_topic = format!("sensors/{}/livedata", sensor_id.to_mqtt());
+        self.topic_callbacks.insert(
+            self.full_topic(&livedata_topic),
+            Box::new(Self::cb_event_livedata),
+        );
+    }
+
+    fn unsubscribe_from_sensor_events(&mut self, sensor_id: &Uuid) {
+        self.unassign_callback(&MqttRequest::SensorUpdate(&sensor_id));
+        self.unassign_callback(&MqttRequest::SensorDelete(&sensor_id));
+
+        self.unassign_callback(&MqttRequest::MetricCreate(&sensor_id));
+        self.unassign_callback(&MqttRequest::MetricUpdate(&sensor_id));
+        self.unassign_callback(&MqttRequest::MetricDelete(&sensor_id));
+
+        self.unassign_callback(&MqttRequest::PushValues(&sensor_id));
+
+        let livedata_topic = format!("sensors/{}/livedata", sensor_id.to_mqtt());
+        self.topic_callbacks.remove(&self.full_topic(&livedata_topic));
     }
 
     fn cb_event_sensor_list(&mut self, response: MqttResponse) -> Result<bool> {
@@ -339,7 +363,39 @@ impl SensorState {
                         name: existing_sensor.name.clone(),
                     });
                 }
-                self.state_event.emit(SensorStateEvent::ExistingLinkedSensorLoaded(linked_sensor));
+
+                {
+                    // Some metrics might've been deleted
+
+                    // TODO Replace Vec<Metric> with HashMap<Metric> finally!!!
+                    let existing_metric_ids = existing_sensor
+                        .metrics
+                        .iter()
+                        .map(|m| m.metric_id().clone())
+                        .collect::<HashSet<Uuid>>();
+                    let linked_metric_ids = linked_sensor
+                        .metrics
+                        .iter()
+                        .map(|m| m.metric_id.clone())
+                        .collect::<HashSet<Uuid>>();
+
+                    let deleted_metric_ids = existing_metric_ids.sub(&linked_metric_ids);
+                    for deleted_metric_id in deleted_metric_ids {
+                        existing_sensor.metrics = existing_sensor
+                            .metrics
+                            .iter()
+                            .filter(|m| deleted_metric_id != *m.metric_id())
+                            .map(|m| m.clone())
+                            .collect();
+                        self.state_event.emit(SensorStateEvent::MetricDeleted {
+                            sensor_id: linked_sensor.sensor_id.clone(),
+                            metric_id: deleted_metric_id,
+                        });
+                    }
+                }
+
+                self.state_event
+                    .emit(SensorStateEvent::ExistingLinkedSensorLoaded(linked_sensor));
             } else {
                 // Completely new sensor => save it and subscribe to all its events
                 let sensor_id = linked_sensor.sensor_id.clone();
@@ -366,9 +422,9 @@ impl SensorState {
 
                 state_changed = true;
 
-                self.state_event.emit(SensorStateEvent::NewLinkedSensorLoaded(linked_sensor));
+                self.state_event
+                    .emit(SensorStateEvent::NewLinkedSensorLoaded(linked_sensor));
             }
-
         }
 
         Ok(state_changed)
@@ -512,7 +568,7 @@ impl SensorState {
         if let Some(sensor_id) = response.get_id(1) {
             if response.get_message() == "All metrics were successfully modified." {
                 self.state_event
-                    .emit(SensorStateEvent::MetricsUpdated { sensor_id });
+                    .emit(SensorStateEvent::SensorUpdated { sensor_id });
             }
         }
 
@@ -524,12 +580,24 @@ impl SensorState {
         if let Some(sensor_id) = response.get_id(1) {
             if response.get_message() == "All metrics were successfully deleted." {
                 self.state_event
-                    .emit(SensorStateEvent::MetricsDeleted { sensor_id });
+                    .emit(SensorStateEvent::SensorUpdated { sensor_id });
             }
         }
         Ok(false)
     }
-    fn cb_event_push_values(&mut self, response: MqttResponse) -> Result<bool> {
+    fn cb_event_push_values(&mut self, _: MqttResponse) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values
+        // TODO handle error case, livedata subscription should the rest
+        Ok(false)
+    }
+
+    fn cb_event_livedata(&mut self, topic: String, message: String) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#52-get-metric-values
+        // if let Some(sensor_id) = response.get_id(1) {
+        //     let message = response.get_message();
+        //     println!("Livedata message: {}", message);
+        // }
+        println!("Livedata topic: {}, message: {}", topic, message);
         Ok(false)
     }
 }

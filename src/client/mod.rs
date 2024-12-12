@@ -14,9 +14,14 @@ use uuid::Uuid;
 use crate::client::mqtt::MqttClientWrapper;
 use crate::client::state::{MqttRequest, SensorState, SensorStateEvent};
 
-use crate::model::protocol::{CreateMetricPayload, CreateSensorRequest, DeleteMetricRequest, MetricsRequest, PingRequest, PingResponse, UpdateMetricRequest, UpdateSensorRequest};
+use crate::model::protocol::{
+    CreateMetricPayload, CreateSensorRequest, DeleteMetricRequest, MetricsRequest, PingRequest,
+    PingResponse, PushMetricValueRequest, UpdateMetricRequest, UpdateSensorRequest,
+};
 use crate::model::sensor::{Metric, Sensor};
 use crate::model::ToMqttId;
+
+use std::time::{Duration, SystemTime};
 
 pub struct SensorVisionClient {
     connector_id: Uuid,
@@ -108,6 +113,7 @@ impl SensorVisionClient {
         println!("Sensor state event received: {:?}", event);
         match &event {
             SensorStateEvent::NewLinkedSensorLoaded(linked_sensor) => {
+                // TODO Fire UI Event
                 for linked_metric in &linked_sensor.metrics {
                     self.async_raw_message(
                         &MqttRequest::MetricDescribe {
@@ -131,12 +137,17 @@ impl SensorVisionClient {
                     .expect("Failed to send message");
                 }
             }
-            SensorStateEvent::NewSensorCreated(..) => {}
-            SensorStateEvent::NewMetricLoaded { .. } => {}
+            SensorStateEvent::NewSensorCreated(..) => {
+                // TODO Fire UI Event
+            }
+            SensorStateEvent::NewMetricLoaded { .. } => {
+                // TODO Fire UI Event
+            }
             SensorStateEvent::NewMetricCreated {
                 sensor_id,
                 metric_id,
             } => {
+                // TODO Fire UI Event
                 self.async_raw_message(
                     &MqttRequest::MetricDescribe {
                         sensor_id,
@@ -149,20 +160,24 @@ impl SensorVisionClient {
             // There is no other way to get sensor/metric update details
             // rather than loading all the sensor again :(
             SensorStateEvent::SensorUpdated { .. } => {
+                // TODO Fire UI Event
                 self.load_sensors().expect("Failed to load sensors");
             }
-            SensorStateEvent::MetricsUpdated { .. } => {
-                self.load_sensors().expect("Failed to load sensors");
+            SensorStateEvent::SensorDeleted { .. } => {
+                // TODO Fire UI Event
             }
-            SensorStateEvent::SensorDeleted { .. } => {}
-            SensorStateEvent::MetricsDeleted { .. } => {
-                self.load_sensors().expect("Failed to load sensors");
+            SensorStateEvent::MetricDeleted { .. } => {
+                // TODO Fire UI Event
             }
             SensorStateEvent::SensorNameChanged { .. } => {
-                self.load_sensors().expect("Failed to load sensors");
+                // TODO Fire UI Event
             }
-            SensorStateEvent::MetricNameChanged { .. } => {}
-            SensorStateEvent::MetricValueAnnotationChanged { .. } => {}
+            SensorStateEvent::MetricNameChanged { .. } => {
+                // TODO Fire UI Event
+            }
+            SensorStateEvent::MetricValueAnnotationChanged { .. } => {
+                // TODO Fire UI Event
+            }
         }
     }
 
@@ -182,10 +197,7 @@ impl SensorVisionClient {
     pub fn metric_id_by_name(&self, sensor_id: &Uuid, name: &str) -> Option<Uuid> {
         let state = self.state.read().unwrap();
         if let Some(sensor) = state.sensors.get(sensor_id) {
-            let found = sensor
-                .metrics
-                .iter()
-                .find(|metric| metric.name() == name);
+            let found = sensor.metrics.iter().find(|metric| metric.name() == name);
             if let Some(metric) = found {
                 return Some(metric.metric_id().clone());
             }
@@ -241,8 +253,8 @@ impl SensorVisionClient {
     }
 
     pub fn create_metrics(&mut self, sensor_id: &Uuid, metrics: &Vec<Metric>) -> Result<()> {
-        let request = MetricsRequest {
-            metrics: metrics
+        let request = MetricsRequest::many(
+            metrics
                 .iter()
                 .enumerate()
                 .map(|(i, metric)| CreateMetricPayload {
@@ -250,7 +262,7 @@ impl SensorVisionClient {
                     matching_id: i + 1,
                 })
                 .collect(),
-        };
+        );
 
         self.async_request_message(&MqttRequest::MetricCreate(sensor_id), &request)
     }
@@ -263,26 +275,42 @@ impl SensorVisionClient {
         value_annotation: Option<&str>,
     ) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#533-update
-        let request = MetricsRequest {
-            metrics: vec![UpdateMetricRequest {
-                metric_id: metric_id.clone(),
-                name,
-                value_annotation,
-            }],
-        };
+        let request = MetricsRequest::one(UpdateMetricRequest {
+            metric_id: metric_id.clone(),
+            name,
+            value_annotation,
+        });
 
         self.async_request_message(&MqttRequest::MetricUpdate(sensor_id), &request)
     }
 
     pub fn delete_metric(&mut self, sensor_id: &Uuid, metric_id: &Uuid) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
-        let request = MetricsRequest {
-            metrics: vec![DeleteMetricRequest {
-                metric_id: metric_id.clone(),
-            }],
-        };
+        let request = MetricsRequest::one(DeleteMetricRequest {
+            metric_id: metric_id.clone(),
+        });
 
         self.async_request_message(&MqttRequest::MetricDelete(sensor_id), &request)
+    }
+
+    pub fn push_value(
+        &mut self,
+        sensor_id: &Uuid,
+        metric_id: &Uuid,
+        value: &str,
+        timestamp: Option<&SystemTime>,
+    ) -> Result<()> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values
+        let request = MetricsRequest::one(PushMetricValueRequest {
+            metric_id: metric_id.clone(),
+            value: value.to_owned(),
+            timestamp: timestamp.map(|ts| {
+                ts.duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+            }),
+        });
+        self.async_request_message(&MqttRequest::PushValues(&sensor_id), &request)
     }
 
     fn async_raw_message(&mut self, action: &MqttRequest, payload: Option<String>) -> Result<()> {

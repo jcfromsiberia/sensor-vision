@@ -54,7 +54,7 @@ fn main() -> Result<()> {
         let mut client = client_rc.lock().unwrap();
         // client.create_sensor("Sensor08122024")?;
 
-        let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
+        let sensor_id = client.sensor_id_by_name("Sensor09122024").unwrap();
 
         // let metrics = vec![
         //     Metric::predefined(
@@ -72,9 +72,13 @@ fn main() -> Result<()> {
         //     ),
         // ];
         // client.create_metrics(&sensor_id, &metrics)?;
-        let metric_id = client.metric_id_by_name(&sensor_id, "ShopFloor1").unwrap();
+        let metric_id = client.metric_id_by_name(&sensor_id, "CPUUsage").unwrap();
 
-        client.update_metric(&sensor_id, &metric_id, None, Some("goods per minute"))?;
+        client.push_value(&sensor_id, &metric_id, "60", None)?;
+        client.push_value(&sensor_id, &metric_id, "64", None)?;
+        // client.update_metric(&sensor_id, &metric_id, None, Some("goods per minute"))?;
+        // client.update_sensor(&sensor_id, "Sensor09122024", None)?;
+        // client.delete_metric(&sensor_id, &metric_id)?;
     }
 
     sleep(Duration::from_secs(1));

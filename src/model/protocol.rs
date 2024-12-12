@@ -25,6 +25,15 @@ pub struct MetricsRequest<T: Serialize> {
     pub metrics: Vec<T>,
 }
 
+impl<T: Serialize> MetricsRequest<T> {
+    pub fn one(metric: T) -> Self {
+        Self { metrics: vec![metric] }
+    }
+    pub fn many(metrics: Vec<T>) -> Self {
+        Self { metrics }
+    }
+}
+
 #[serde_as]
 #[derive(Deserialize)]
 pub struct CreateMetricResponsePayload {
@@ -67,6 +76,18 @@ pub struct DeleteMetricRequest {
     #[serde(rename = "metricId")]
     #[serde(with = "uuid::serde::simple")]
     pub metric_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PushMetricStringValueRequest {
+    #[serde(rename = "metricId")]
+    #[serde(with = "uuid::serde::simple")]
+    pub metric_id: Uuid,
+
+    pub value: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u128>,
 }
 
 #[derive(Debug, Serialize)]
