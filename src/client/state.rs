@@ -108,16 +108,17 @@ enum MqttResponse {
 }
 
 impl MqttResponse {
-    pub fn get_ids(&self) -> Vec<Uuid> {
+    pub fn get_id(&self, index: usize) -> Option<Uuid> {
         let topic = self.get_topic();
 
         let re = Regex::new(r"/([a-f0-9]{32})/").expect("Failed to create regex");
 
-        re.captures_iter(&topic)
+        let result = re
+            .captures_iter(&topic)
             .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
-            .skip(1) // skip connector id
             .map(|m| Uuid::parse_str(m.as_str()).expect("Failed to parse uuid"))
-            .collect()
+            .nth(index);
+        result
     }
 
     pub fn get_topic(&self) -> &String {
@@ -138,9 +139,47 @@ impl MqttResponse {
 #[derive(Debug, Clone)]
 pub enum SensorStateEvent {
     NewLinkedSensorLoaded(Sensor<LinkedMetric>),
+    ExistingLinkedSensorLoaded(Sensor<LinkedMetric>),
+
+    NewMetricLoaded {
+        sensor_id: Uuid,
+        metric: Metric,
+    },
+
     NewSensorCreated(Sensor<Metric>),
-    NewMetricCreated { sensor_id: Uuid, metric_id: Uuid },
-    NewMetricLoaded { sensor_id: Uuid, metric: Metric },
+    NewMetricCreated {
+        sensor_id: Uuid,
+        metric_id: Uuid,
+    },
+
+    SensorUpdated {
+        sensor_id: Uuid,
+    },
+    MetricsUpdated {
+        sensor_id: Uuid,
+    },
+
+    SensorDeleted {
+        sensor_id: Uuid,
+    },
+    MetricsDeleted {
+        sensor_id: Uuid,
+    },
+
+    SensorNameChanged {
+        sensor_id: Uuid,
+        name: String,
+    },
+    MetricNameChanged {
+        sensor_id: Uuid,
+        metric_id: Uuid,
+        name: String,
+    },
+    MetricValueAnnotationChanged {
+        sensor_id: Uuid,
+        metric_id: Uuid,
+        annotation: String,
+    },
 }
 
 pub struct SensorState {
@@ -175,20 +214,14 @@ impl SensorState {
         result
     }
 
-    pub fn subscribe_to_state_events<Slot>(
-        &mut self,
-        slot: Slot,
-    ) -> Result<signals2::Connection>
+    pub fn subscribe_to_state_events<Slot>(&mut self, slot: Slot) -> Result<signals2::Connection>
     where
         Slot: Fn(SensorStateEvent) + Send + Sync + 'static,
     {
         Ok(self.state_event.connect(slot))
     }
 
-    pub fn subscribe_to_mqtt_events(
-        &mut self,
-        mqtt_client: &mut MqttClientWrapper,
-    ) -> Result<()> {
+    pub fn subscribe_to_mqtt_events(&mut self, mqtt_client: &mut MqttClientWrapper) -> Result<()> {
         let generic_topic = self.full_topic("#");
 
         let weak_self = self.weak_self.clone();
@@ -233,11 +266,8 @@ impl SensorState {
 
     fn assign_callback<Callback>(&mut self, action: &MqttRequest, callback: Callback)
     where
-        Callback: Fn(&mut SensorState, MqttResponse) -> Result<bool>
-            + Clone
-            + Send
-            + Sync
-            + 'static,
+        Callback:
+            Fn(&mut SensorState, MqttResponse) -> Result<bool> + Clone + Send + Sync + 'static,
     {
         let (_, response_topic, error_topic) = action.get_topics();
 
@@ -258,10 +288,6 @@ impl SensorState {
     }
 
     fn subscribe_to_sensor_events(&mut self, sensor_id: &Uuid) {
-        self.assign_callback(
-            &MqttRequest::SensorUpdate(&sensor_id),
-            Self::cb_event_sensor_update,
-        );
         self.assign_callback(
             &MqttRequest::SensorUpdate(&sensor_id),
             Self::cb_event_sensor_update,
@@ -302,12 +328,23 @@ impl SensorState {
         let mut state_changed = false;
         // Merging new sensors
         for linked_sensor in linked_sensors {
-            if self.sensors.get(&linked_sensor.sensor_id).is_none() {
-                let event = SensorStateEvent::NewLinkedSensorLoaded(linked_sensor.clone());
-
+            let mut existing_sensor = self.sensors.get_mut(&linked_sensor.sensor_id);
+            if let Some(existing_sensor) = existing_sensor {
+                // The name might have been changed
+                if existing_sensor.name != linked_sensor.name {
+                    state_changed = true;
+                    existing_sensor.name = linked_sensor.name.clone();
+                    self.state_event.emit(SensorStateEvent::SensorNameChanged {
+                        sensor_id: linked_sensor.sensor_id.clone(),
+                        name: existing_sensor.name.clone(),
+                    });
+                }
+                self.state_event.emit(SensorStateEvent::ExistingLinkedSensorLoaded(linked_sensor));
+            } else {
+                // Completely new sensor => save it and subscribe to all its events
                 let sensor_id = linked_sensor.sensor_id.clone();
                 let new_sensor = Sensor {
-                    name: linked_sensor.name,
+                    name: linked_sensor.name.clone(),
                     connector_id: linked_sensor.connector_id,
                     sensor_id: linked_sensor.sensor_id,
                     metrics: Vec::new(),
@@ -328,8 +365,10 @@ impl SensorState {
                 }
 
                 state_changed = true;
-                self.state_event.emit(event);
+
+                self.state_event.emit(SensorStateEvent::NewLinkedSensorLoaded(linked_sensor));
             }
+
         }
 
         Ok(state_changed)
@@ -356,14 +395,37 @@ impl SensorState {
     }
 
     fn cb_event_sensor_update(&mut self, response: MqttResponse) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#533-update
+        // there is no info provided with the response, so only the initiator knows
+        // what name it was -> name cannot be deduced from the response,
+        // given the initiator might be a separate mosquitto_pub process or another client.
+        // Thus, re-requesting the entire sensor list as you cannot request concrete sensor
+        // details.
+
+        if let Some(sensor_id) = response.get_id(1) {
+            if response.get_message() == "Sensor was changed." {
+                self.state_event
+                    .emit(SensorStateEvent::SensorUpdated { sensor_id });
+            }
+        }
+
         Ok(false)
     }
     fn cb_event_sensor_delete(&mut self, response: MqttResponse) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#534-delete
+        if let Some(sensor_id) = response.get_id(1) {
+            if response.get_message() == "Sensor was deleted." {
+                self.sensors.remove(&sensor_id);
+                self.state_event
+                    .emit(SensorStateEvent::SensorDeleted { sensor_id });
+                return Ok(true);
+            }
+        }
         Ok(false)
     }
     fn cb_event_metric_describe(&mut self, response: MqttResponse) -> Result<bool> {
         // TODO handle error case
-        if let [sensor_id, metric_id, ..] = response.get_ids()[..] {
+        if let (Some(sensor_id), Some(metric_id)) = (response.get_id(1), response.get_id(2)) {
             let message = response.get_message();
 
             let described_metric = serde_json::from_str::<Metric>(&message)?;
@@ -371,38 +433,100 @@ impl SensorState {
                 .sensors
                 .get_mut(&sensor_id)
                 .ok_or_eyre("Sensor not found")?;
+
+            let mut state_changed = false;
+
             // If metrics was a HashMap, it'd be much simpler :(
-            let metric_found = sensor.metrics.iter().find(|m| *m.metric_id() == metric_id);
-            if metric_found.is_some() {
-                return Ok(false);
+            let metric_found = sensor
+                .metrics
+                .iter_mut()
+                .find(|m| *m.metric_id() == metric_id);
+            if let Some(existing_metric) = metric_found {
+                if existing_metric.name() != described_metric.name() {
+                    existing_metric.rename(described_metric.name().clone());
+                    state_changed = true;
+                    self.state_event.emit(SensorStateEvent::MetricNameChanged {
+                        sensor_id: sensor_id.clone(),
+                        metric_id: metric_id.clone(),
+                        name: existing_metric.name().clone(),
+                    });
+                }
+
+                match (existing_metric, described_metric) {
+                    (
+                        Metric::Custom {
+                            value_annotation, ..
+                        },
+                        Metric::Custom {
+                            value_annotation: new_annotation,
+                            ..
+                        },
+                    ) => {
+                        if *value_annotation != new_annotation {
+                            *value_annotation = new_annotation;
+                            state_changed = true;
+                            self.state_event
+                                .emit(SensorStateEvent::MetricValueAnnotationChanged {
+                                    sensor_id: sensor_id.clone(),
+                                    metric_id: metric_id.clone(),
+                                    annotation: value_annotation.clone(),
+                                });
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                sensor.metrics.push(described_metric.clone());
+
+                self.state_event.emit(SensorStateEvent::NewMetricLoaded {
+                    sensor_id,
+                    metric: described_metric,
+                });
+
+                state_changed = true;
             }
-
-            sensor.metrics.push(described_metric.clone());
-            self.state_event.emit(SensorStateEvent::NewMetricLoaded {sensor_id, metric: described_metric});
-
-            Ok(true)
+            Ok(state_changed)
         } else {
             Ok(false)
         }
     }
     fn cb_event_metric_create(&mut self, response: MqttResponse) -> Result<bool> {
         // TODO handle error case
-        if let [sensor_id, ..] = response.get_ids()[..] {
+        if let Some(sensor_id) = response.get_id(1) {
             let message = response.get_message();
-            let metrics_created =
-                serde_json::from_str::<Vec<CreateMetricResponsePayload>>(message)
-                    .wrap_err_with(|| format!("Failed to deserialize: {}", message))?;
+            let metrics_created = serde_json::from_str::<Vec<CreateMetricResponsePayload>>(message)
+                .wrap_err_with(|| format!("Failed to deserialize: {}", message))?;
             for payload in &metrics_created {
                 self.state_event.emit(SensorStateEvent::NewMetricCreated {
-                    sensor_id, metric_id: payload.metric_id.clone(), });
+                    sensor_id,
+                    metric_id: payload.metric_id.clone(),
+                });
             }
         }
         Ok(false)
     }
     fn cb_event_metric_update(&mut self, response: MqttResponse) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
+        // Similar story to `cb_event_sensor_update`
+
+        if let Some(sensor_id) = response.get_id(1) {
+            if response.get_message() == "All metrics were successfully modified." {
+                self.state_event
+                    .emit(SensorStateEvent::MetricsUpdated { sensor_id });
+            }
+        }
+
         Ok(false)
     }
     fn cb_event_metric_delete(&mut self, response: MqttResponse) -> Result<bool> {
+        // According to https://docs-iot.teamviewer.com/mqtt-api/#544-delete
+        // Similar story to `cb_event_sensor_update`
+        if let Some(sensor_id) = response.get_id(1) {
+            if response.get_message() == "All metrics were successfully deleted." {
+                self.state_event
+                    .emit(SensorStateEvent::MetricsDeleted { sensor_id });
+            }
+        }
         Ok(false)
     }
     fn cb_event_push_values(&mut self, response: MqttResponse) -> Result<bool> {

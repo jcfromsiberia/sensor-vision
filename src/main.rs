@@ -35,55 +35,51 @@ fn main() -> Result<()> {
 
     let connector_id = cert.subject_common_name().ok_or_eyre("Certificate has no CN")?;
     let connector_id = Uuid::parse_str(&connector_id)?;
-    let client = Arc::new(Mutex::new(MqttClientWrapper::new()?));
+    let mqtt_client = Arc::new(Mutex::new(MqttClientWrapper::new()?));
 
-    let sensor_state_rc = SensorVisionClient::new(connector_id, client)?;
+    let client_rc = SensorVisionClient::new(connector_id, mqtt_client)?;
     {
-        let mut sensor_state = sensor_state_rc.lock().unwrap();
+        let mut client = client_rc.lock().unwrap();
 
         if matches.get_flag("ping") {
-            return sensor_state.ping_test();
+            return client.ping_test();
         }
 
-        sensor_state.load_sensors()?;
-        sleep(Duration::from_secs(1));
+        client.load_sensors()?;
     }
+    // Wait while sensors being loaded
+    sleep(Duration::from_secs(1));
 
     if matches.get_flag("test") {
-        let mut sensor_state = sensor_state_rc.lock().unwrap();
-        // sensor_state.create_sensor("Sensor07122024")?;
+        let mut client = client_rc.lock().unwrap();
+        // client.create_sensor("Sensor08122024")?;
 
-        let sensor_id = sensor_state.sensor_id_by_name("Sensor07122024").unwrap();
+        let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
 
-        let metrics = vec![
-            Metric::predefined(
-                String::from("CPUUsage"),
-                ValueUnit::Percent,
-            ),
-            Metric::predefined(
-                String::from("CPUIdle"),
-                ValueUnit::Percent,
-            ),
-            Metric::custom(
-                String::from("ShopFloor1"),
-                ValueType::Integer,
-                String::from("goods per minute"),
-            ),
-        ];
-        sensor_state.create_metrics(&sensor_id, &metrics)?;
+        // let metrics = vec![
+        //     Metric::predefined(
+        //         String::from("CPUUsage"),
+        //         ValueUnit::Percent,
+        //     ),
+        //     Metric::predefined(
+        //         String::from("CPUIdle"),
+        //         ValueUnit::Percent,
+        //     ),
+        //     Metric::custom(
+        //         String::from("ShopFloor1"),
+        //         ValueType::Integer,
+        //         String::from("goods per minute"),
+        //     ),
+        // ];
+        // client.create_metrics(&sensor_id, &metrics)?;
+        let metric_id = client.metric_id_by_name(&sensor_id, "ShopFloor1").unwrap();
 
-        //
-        // let sensor_ref =
-        //     {
-        //         let mut sensor_state = sensor_state_rc.borrow();
-        //         sensor_state.sensors[&sensor_state.sensors.keys().next().unwrap()].clone()
-        //     };
-        // sensor_ref.borrow_mut().create_metrics(metrics)?;
+        client.update_metric(&sensor_id, &metric_id, None, Some("goods per minute"))?;
     }
 
     sleep(Duration::from_secs(1));
 
-    println!("{}", sensor_state_rc.lock().unwrap().dump_sensors()?);
+    println!("{}", client_rc.lock().unwrap().dump_sensors()?);
 
     Ok(())
 }

@@ -176,6 +176,13 @@ impl Metric {
             Metric::Custom { metric_id, .. } => metric_id,
         }
     }
+
+    pub fn rename(&mut self, new_name: String) {
+        match self {
+            Metric::Predefined { name, .. } => {*name = new_name;},
+            Metric::Custom { name, .. } => {*name = new_name;},
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

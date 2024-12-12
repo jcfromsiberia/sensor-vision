@@ -16,6 +16,7 @@ pub struct CreateSensorRequest {
 pub struct UpdateSensorRequest {
     pub name: String,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<u8>,
 }
 
@@ -48,20 +49,24 @@ pub struct CreateMetricPayload {
 }
 
 #[derive(Debug, Serialize)]
-pub struct UpdateMetricRequest<'b> {
+pub struct UpdateMetricRequest<'a> {
     #[serde(rename = "metricId")]
-    pub metric_id: String,
+    #[serde(with = "uuid::serde::simple")]
+    pub metric_id: Uuid,
 
-    pub name: Option<&'b str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
 
     #[serde(rename = "valueAnnotation")]
-    pub value_annotation: Option<&'b str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_annotation: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DeleteMetricRequest {
     #[serde(rename = "metricId")]
-    pub metric_id: String,
+    #[serde(with = "uuid::serde::simple")]
+    pub metric_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
