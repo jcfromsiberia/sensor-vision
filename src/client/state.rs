@@ -11,7 +11,9 @@ use std::sync::{Arc, RwLock, Weak};
 use uuid::Uuid;
 
 use crate::client::mqtt::MqttClientWrapper;
-use crate::model::protocol::CreateMetricResponsePayload;
+use crate::model::protocol::{
+    CreateMetricResponsePayload, MetricValue, MetricsArrayResponse, PushMetricValueResponse,
+};
 use crate::model::sensor::{LinkedMetric, Metric, Sensor};
 use crate::model::ToMqttId;
 
@@ -50,7 +52,7 @@ impl MqttRequest<'_> {
                 format!("sensor/{}/update/error/inbox", sensor_id.to_mqtt()),
             ),
             MqttRequest::SensorDelete(sensor_id) => (
-                format!("sensor/{}/delete", sensor_id),
+                format!("sensor/{}/delete", sensor_id.to_mqtt()),
                 format!("sensor/{}/delete/info/inbox", sensor_id.to_mqtt()),
                 format!("sensor/{}/delete/error/inbox", sensor_id.to_mqtt()),
             ),
@@ -178,6 +180,12 @@ pub enum SensorStateEvent {
         sensor_id: Uuid,
         metric_id: Uuid,
         annotation: String,
+    },
+
+    Livedata {
+        sensor_id: Uuid,
+        metric_id: Uuid,
+        value: MetricValue,
     },
 }
 
@@ -321,7 +329,7 @@ impl SensorState {
             Self::cb_event_push_values,
         );
 
-        let livedata_topic = format!("sensors/{}/livedata", sensor_id.to_mqtt());
+        let livedata_topic = format!("sensor/{}/livedata", sensor_id.to_mqtt());
         self.topic_callbacks.insert(
             self.full_topic(&livedata_topic),
             Box::new(Self::cb_event_livedata),
@@ -339,7 +347,8 @@ impl SensorState {
         self.unassign_callback(&MqttRequest::PushValues(&sensor_id));
 
         let livedata_topic = format!("sensors/{}/livedata", sensor_id.to_mqtt());
-        self.topic_callbacks.remove(&self.full_topic(&livedata_topic));
+        self.topic_callbacks
+            .remove(&self.full_topic(&livedata_topic));
     }
 
     fn cb_event_sensor_list(&mut self, response: MqttResponse) -> Result<bool> {
@@ -352,21 +361,11 @@ impl SensorState {
         let mut state_changed = false;
         // Merging new sensors
         for linked_sensor in linked_sensors {
-            let mut existing_sensor = self.sensors.get_mut(&linked_sensor.sensor_id);
-            if let Some(existing_sensor) = existing_sensor {
-                // The name might have been changed
-                if existing_sensor.name != linked_sensor.name {
-                    state_changed = true;
-                    existing_sensor.name = linked_sensor.name.clone();
-                    self.state_event.emit(SensorStateEvent::SensorNameChanged {
-                        sensor_id: linked_sensor.sensor_id.clone(),
-                        name: existing_sensor.name.clone(),
-                    });
-                }
-
-                {
-                    // Some metrics might've been deleted
-
+            if self.sensors.contains_key(&linked_sensor.sensor_id) {
+                // Some metrics might've been deleted
+                let deleted_metric_ids = {
+                    // Immutable sensor
+                    let existing_sensor = self.sensors.get(&linked_sensor.sensor_id).unwrap();
                     // TODO Replace Vec<Metric> with HashMap<Metric> finally!!!
                     let existing_metric_ids = existing_sensor
                         .metrics
@@ -378,20 +377,39 @@ impl SensorState {
                         .iter()
                         .map(|m| m.metric_id.clone())
                         .collect::<HashSet<Uuid>>();
+                    existing_metric_ids.sub(&linked_metric_ids)
+                };
 
-                    let deleted_metric_ids = existing_metric_ids.sub(&linked_metric_ids);
-                    for deleted_metric_id in deleted_metric_ids {
-                        existing_sensor.metrics = existing_sensor
-                            .metrics
-                            .iter()
-                            .filter(|m| deleted_metric_id != *m.metric_id())
-                            .map(|m| m.clone())
-                            .collect();
-                        self.state_event.emit(SensorStateEvent::MetricDeleted {
-                            sensor_id: linked_sensor.sensor_id.clone(),
-                            metric_id: deleted_metric_id,
-                        });
-                    }
+                for deleted_metric_id in &deleted_metric_ids {
+                    self.unassign_callback(&MqttRequest::MetricDescribe {
+                        sensor_id: &linked_sensor.sensor_id,
+                        metric_id: deleted_metric_id,
+                    });
+                }
+                // Mutable sensor -> no `&mut self` available
+                let existing_sensor = self.sensors.get_mut(&linked_sensor.sensor_id).unwrap();
+                // The name might have been changed
+                if existing_sensor.name != linked_sensor.name {
+                    state_changed = true;
+                    existing_sensor.name = linked_sensor.name.clone();
+                    self.state_event.emit(SensorStateEvent::SensorNameChanged {
+                        sensor_id: linked_sensor.sensor_id.clone(),
+                        name: existing_sensor.name.clone(),
+                    });
+                }
+
+                for deleted_metric_id in deleted_metric_ids {
+                    existing_sensor.metrics = existing_sensor
+                        .metrics
+                        .iter()
+                        .filter(|m| deleted_metric_id != *m.metric_id())
+                        .map(|m| m.clone())
+                        .collect();
+                    self.state_event.emit(SensorStateEvent::MetricDeleted {
+                        sensor_id: linked_sensor.sensor_id.clone(),
+                        metric_id: deleted_metric_id,
+                    });
+                    state_changed = true;
                 }
 
                 self.state_event
@@ -553,8 +571,15 @@ impl SensorState {
             let metrics_created = serde_json::from_str::<Vec<CreateMetricResponsePayload>>(message)
                 .wrap_err_with(|| format!("Failed to deserialize: {}", message))?;
             for payload in &metrics_created {
+                self.assign_callback(
+                    &MqttRequest::MetricDescribe {
+                        sensor_id: &sensor_id,
+                        metric_id: &payload.metric_id,
+                    },
+                    Self::cb_event_metric_describe,
+                );
                 self.state_event.emit(SensorStateEvent::NewMetricCreated {
-                    sensor_id,
+                    sensor_id: sensor_id.clone(),
                     metric_id: payload.metric_id.clone(),
                 });
             }
@@ -593,11 +618,20 @@ impl SensorState {
 
     fn cb_event_livedata(&mut self, topic: String, message: String) -> Result<bool> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#52-get-metric-values
-        // if let Some(sensor_id) = response.get_id(1) {
-        //     let message = response.get_message();
-        //     println!("Livedata message: {}", message);
-        // }
-        println!("Livedata topic: {}, message: {}", topic, message);
+        let response = MqttResponse::Ok {topic, message};
+        if let Some(sensor_id) = response.get_id(1) {
+            let message = response.get_message();
+            let value_updates =
+                serde_json::from_str::<MetricsArrayResponse<PushMetricValueResponse>>(message)
+                    .wrap_err_with(|| format!("Failed to deserialize: {}", message))?;
+            for value_update in value_updates.metrics {
+                self.state_event.emit(SensorStateEvent::Livedata {
+                    sensor_id: sensor_id.clone(),
+                    metric_id: value_update.metric_id,
+                    value: value_update.value,
+                });
+            }
+        }
         Ok(false)
     }
 }

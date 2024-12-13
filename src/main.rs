@@ -17,6 +17,7 @@ use client::SensorVisionClient;
 use client::mqtt::{setup_new_certificate, MqttClientWrapper};
 
 use model::sensor::{Metric, ValueUnit, ValueType};
+use model::protocol::MetricValue;
 
 fn main() -> Result<()> {
     let matches = command!()
@@ -54,7 +55,13 @@ fn main() -> Result<()> {
         let mut client = client_rc.lock().unwrap();
         // client.create_sensor("Sensor08122024")?;
 
-        let sensor_id = client.sensor_id_by_name("Sensor09122024").unwrap();
+        let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
+        // client.delete_sensor(&sensor_id)?;
+
+        // {
+        //     let metric_id = client.metric_id_by_name(&sensor_id, "CPUUsage").unwrap();
+        //     client.delete_metric(&sensor_id, &metric_id)?;
+        // }
 
         // let metrics = vec![
         //     Metric::predefined(
@@ -73,9 +80,9 @@ fn main() -> Result<()> {
         // ];
         // client.create_metrics(&sensor_id, &metrics)?;
         let metric_id = client.metric_id_by_name(&sensor_id, "CPUUsage").unwrap();
+        //
+        client.push_value(&sensor_id, &metric_id, &MetricValue::Double(64f64), None)?;
 
-        client.push_value(&sensor_id, &metric_id, "60", None)?;
-        client.push_value(&sensor_id, &metric_id, "64", None)?;
         // client.update_metric(&sensor_id, &metric_id, None, Some("goods per minute"))?;
         // client.update_sensor(&sensor_id, "Sensor09122024", None)?;
         // client.delete_metric(&sensor_id, &metric_id)?;

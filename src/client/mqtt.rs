@@ -110,6 +110,8 @@ impl MqttClientWrapper {
             .qos(mqtt::QOS_1)
             .finalize();
 
+        println!("Mqtt Async: {} to {}", payload, topic);
+
         self.event_client.publish(message).wait()?;
         Ok(())
     }

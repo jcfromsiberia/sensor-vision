@@ -3,7 +3,6 @@ pub mod state;
 
 use eyre::{eyre, Result, WrapErr};
 
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -14,14 +13,11 @@ use uuid::Uuid;
 use crate::client::mqtt::MqttClientWrapper;
 use crate::client::state::{MqttRequest, SensorState, SensorStateEvent};
 
-use crate::model::protocol::{
-    CreateMetricPayload, CreateSensorRequest, DeleteMetricRequest, MetricsRequest, PingRequest,
-    PingResponse, PushMetricValueRequest, UpdateMetricRequest, UpdateSensorRequest,
-};
-use crate::model::sensor::{Metric, Sensor};
+use crate::model::protocol::{CreateMetricPayload, CreateSensorRequest, DeleteMetricRequest, MetricValue, MetricsArrayRequest, PingRequest, PingResponse, PushMetricValueRequest, UpdateMetricRequest, UpdateSensorRequest};
+use crate::model::sensor::Metric;
 use crate::model::ToMqttId;
 
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 pub struct SensorVisionClient {
     connector_id: Uuid,
@@ -178,6 +174,9 @@ impl SensorVisionClient {
             SensorStateEvent::MetricValueAnnotationChanged { .. } => {
                 // TODO Fire UI Event
             }
+            SensorStateEvent::Livedata {.. } => {
+                // TODO Fire UI Event
+            }
         }
     }
 
@@ -186,7 +185,7 @@ impl SensorVisionClient {
         let found = state
             .sensors
             .iter()
-            .find(|(sensor_id, sensor)| sensor.name == sensor_name);
+            .find(|(_, sensor)| sensor.name == sensor_name);
         if let Some((sensor_id, _)) = found {
             Some(sensor_id.clone())
         } else {
@@ -253,7 +252,7 @@ impl SensorVisionClient {
     }
 
     pub fn create_metrics(&mut self, sensor_id: &Uuid, metrics: &Vec<Metric>) -> Result<()> {
-        let request = MetricsRequest::many(
+        let request = MetricsArrayRequest::many(
             metrics
                 .iter()
                 .enumerate()
@@ -275,7 +274,7 @@ impl SensorVisionClient {
         value_annotation: Option<&str>,
     ) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#533-update
-        let request = MetricsRequest::one(UpdateMetricRequest {
+        let request = MetricsArrayRequest::one(UpdateMetricRequest {
             metric_id: metric_id.clone(),
             name,
             value_annotation,
@@ -286,7 +285,7 @@ impl SensorVisionClient {
 
     pub fn delete_metric(&mut self, sensor_id: &Uuid, metric_id: &Uuid) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
-        let request = MetricsRequest::one(DeleteMetricRequest {
+        let request = MetricsArrayRequest::one(DeleteMetricRequest {
             metric_id: metric_id.clone(),
         });
 
@@ -297,18 +296,20 @@ impl SensorVisionClient {
         &mut self,
         sensor_id: &Uuid,
         metric_id: &Uuid,
-        value: &str,
+        value: &MetricValue,
         timestamp: Option<&SystemTime>,
     ) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values
-        let request = MetricsRequest::one(PushMetricValueRequest {
-            metric_id: metric_id.clone(),
-            value: value.to_owned(),
-            timestamp: timestamp.map(|ts| {
-                ts.duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            }),
+        let timestamp = timestamp.map(|ts| {
+            ts.duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        });
+
+        let request = MetricsArrayRequest::one(PushMetricValueRequest {
+            metric_id : metric_id.clone(),
+            value: value.clone(),
+            timestamp,
         });
         self.async_request_message(&MqttRequest::PushValues(&sensor_id), &request)
     }
