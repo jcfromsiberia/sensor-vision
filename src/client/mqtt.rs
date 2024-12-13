@@ -103,16 +103,14 @@ impl MqttClientWrapper {
         })
     }
 
-    pub fn sync_message(&mut self, topic: &str, payload: &str) -> eyre::Result<()> {
+    pub fn async_message(&mut self, topic: &str, payload: &str) -> eyre::Result<()> {
         let message = mqtt::MessageBuilder::new()
             .topic(topic)
             .payload(payload.as_bytes())
             .qos(mqtt::QOS_1)
             .finalize();
 
-        println!("Mqtt Async: {} to {}", payload, topic);
-
-        self.event_client.publish(message).wait()?;
+        self.request_client.publish(message).wait()?;
         Ok(())
     }
     pub fn subscribe<Slot>(&mut self, topic: &str, slot: Slot) -> eyre::Result<signals2::Connection>

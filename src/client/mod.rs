@@ -326,7 +326,7 @@ impl SensorVisionClient {
 
         let message = payload.unwrap_or(String::from("{}"));
 
-        client.sync_message(&full_topic, &message)
+        client.async_message(&full_topic, &message)
     }
 
     fn async_request_message<Request>(&mut self, action: &MqttRequest, body: &Request) -> Result<()>

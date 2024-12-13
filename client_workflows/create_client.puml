@@ -1,0 +1,39 @@
+@startuml
+
+!theme toy
+
+box SensorVision App #grey
+    participant SensorVisionClient as Client
+    participant MetadataState as State
+    participant MqttClientWrapper as Mqtt
+end box
+
+participant "Mosquitto Broker" as Broker
+
+== Initialize Client ==
+-> Mqtt ++: MqttClientWrapper::new
+Mqtt -> Mqtt ++--: Read ./clientCert.crt
+Mqtt -> Mqtt ++--: Read ./privkey.pem
+Mqtt -> Mqtt ++--: Create request_client
+Mqtt -> Mqtt ++--: Create event_client
+Mqtt -> Broker ++: Connect both clients to\nmqtts://localhost:18884
+Mqtt <-- Broker --: <<OK>>
+<-- Mqtt --: mqtt_client
+-> Client ++: Client::new [mqtt_client]
+Client -> State ++: State::new [ConnectorID]
+State -> State ++--: Store [ConnectorID]
+Client <-- State --: [state]
+Client -> State ++: Subscribe [mqtt_client]
+State -> Mqtt ++: Subscribe to /v1.0/<ConnectorID>/#\n[mqtt_callback]
+Mqtt -> Mqtt ++--: Subscribe event_client\nto /v1.0/<ConnectorID>/#
+Mqtt -> Mqtt ++--: Set message callback\nfor event_client\nas [mqtt_callback]
+State <-- Mqtt --: Subscription
+State -> State ++--: Subscribe to\n/v1.0/<ConnectorID>/sensor/list\n[callback]
+State -> State ++--: Subscribe to\n/v1.0/<ConnectorID>/sensor/create\n[callback]
+Client <-- State --: <<OK>>
+Client -> Client ++--: Create StateEvent\nchannel\n+[event_sender]\n+[event_receiver]
+Client -> Client ++--: Start StateEvent\nlistener thread\n[event_receiver]
+Client --> State : Subscribe to State Events\n[event_sender]
+<-- Client --: [client]
+
+@enduml

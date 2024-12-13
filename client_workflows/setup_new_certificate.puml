@@ -1,0 +1,27 @@
+@startuml
+
+!theme toy
+
+box SensorVision App #grey
+    participant SensorVisionClient as Client
+    participant MetadataState as State
+    participant MqttClientWrapper as Mqtt
+end box
+
+participant "Mosquitto Broker" as Broker
+participant "IoT Agent" as Agent
+
+== Generate clientCert.crt ==
+-> Mqtt ++: setup new certificate
+Mqtt -> Mqtt ++--: Read ./csr.pem and its hash
+Mqtt --> Broker : Subscribe to /certBack/{hash}
+Mqtt -> Broker ++: Post csr.pem to /v1.0/createClient
+Mqtt -> Mqtt ++: Wait for response
+Broker -> Agent ++--: <forward>
+Agent -> Agent ++--: Generate Certificate with\nConnectorID embedded
+Broker <-- Agent ++--: Post cert to \n /certBack/{hash}
+Mqtt <-- Broker --: <forward>
+Mqtt -> Mqtt --: Store ./clientCert.crt
+deactivate Mqtt
+
+@enduml
