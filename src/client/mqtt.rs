@@ -137,7 +137,7 @@ impl MqttClientWrapper {
 }
 
 pub fn setup_new_certificate() -> eyre::Result<()> {
-    // According to https://docs-iot.teamviewer.com/mqtt-api/?coupon=CMP-PR-BF24#3-data-model
+    // According to https://docs-iot.teamviewer.com/mqtt-api/#3-data-model
     block_on(async {
         let csr_contents = fs::read("csr.pem").expect("Failed to read csr.pem");
 
