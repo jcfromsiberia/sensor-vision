@@ -21,6 +21,7 @@ pub struct MqttClientWrapper {
 impl MqttClientWrapper {
     pub fn new() -> eyre::Result<Self> {
         // TODO inject params
+        log::trace!("Create MqttClientWrapper");
         let host = String::from("mqtts://localhost:18884");
 
         let trust_store =
@@ -52,8 +53,10 @@ impl MqttClientWrapper {
             .keep_alive_interval(Duration::from_secs(30))
             .finalize();
 
+        log::debug!("Connecting to the broker");
         request_client.connect(conn_opts.clone()).wait()?;
         event_client.connect(conn_opts).wait()?;
+        log::debug!("Connected");
 
         Ok(Self {
             request_client,
@@ -69,6 +72,8 @@ impl MqttClientWrapper {
         error_topic: &str,
         payload: &str,
     ) -> eyre::Result<String> {
+        log::trace!("Send SYNC Request\n\tTopic: {}\n\tResponse Topic: {}\n\tError Topic: {}\n\tMessage: {}",
+            topic, response_topic, error_topic, payload);
         block_on(async {
             let client = &mut self.request_client;
             let mut stream = client.get_stream(2 << 14);
@@ -82,8 +87,6 @@ impl MqttClientWrapper {
                 .payload(payload.as_bytes())
                 .qos(mqtt::QOS_1)
                 .finalize();
-
-            // println!("Sending to topic {topic}\nwith response subscription to {response_topic}\nwith error subscription to {error_topic}\nwith payload {payload}");
 
             client.publish(message).await?;
 
@@ -104,6 +107,11 @@ impl MqttClientWrapper {
     }
 
     pub fn async_message(&mut self, topic: &str, payload: &str) -> eyre::Result<()> {
+        log::info!(
+            "Send ASYNC Request\n\tTopic: {}\n\tMessage: {}",
+            topic,
+            payload
+        );
         let message = mqtt::MessageBuilder::new()
             .topic(topic)
             .payload(payload.as_bytes())
@@ -117,6 +125,7 @@ impl MqttClientWrapper {
     where
         Slot: Fn(String, String) + Send + Sync + 'static,
     {
+        log::trace!("Subscribe to MQTT topic(s) by {}", topic);
         if self.event_signal.count() == 1 {
             return Err(eyre!("Multiple subscribers are not supported"));
         }
@@ -135,6 +144,7 @@ impl MqttClientWrapper {
 
 pub fn setup_new_certificate() -> eyre::Result<()> {
     // According to https://docs-iot.teamviewer.com/mqtt-api/#3-data-model
+    log::trace!("Setup new client certificate");
     block_on(async {
         let csr_contents = fs::read("csr.pem").expect("Failed to read csr.pem");
 

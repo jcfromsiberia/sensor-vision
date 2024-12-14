@@ -1,5 +1,11 @@
 use eyre::{OptionExt, Result};
 
+use log::LevelFilter;
+
+use log4rs::append::file::FileAppender;
+use log4rs::encode::pattern::PatternEncoder;
+use log4rs::config::{Appender, Config, Logger, Root};
+
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
@@ -20,6 +26,24 @@ use model::sensor::{Metric, ValueUnit, ValueType};
 use model::protocol::MetricValue;
 
 fn main() -> Result<()> {
+    // TODO Add log rotation, see log4rs examples
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S)}\t[{l}]\t{P}/{T}\t{f}:{L}: {m}\n")))
+        .build("sensor-vision.log")?;
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .logger(Logger::builder()
+            .appender("logfile")
+            .additive(false)
+            .build("sensor_vision", LevelFilter::Trace))
+        .build(Root::builder()
+            .appender("logfile")
+            .build(LevelFilter::Error))?;
+
+    log4rs::init_config(config)?;
+
+    log::info!("Program Started");
     let matches = command!()
         .arg(arg!(-n --new "Quick setup a new connector").action(ArgAction::SetTrue))
         .arg(arg!(-t --test "Generate test sensor and metrics").action(ArgAction::SetTrue))
@@ -90,7 +114,7 @@ fn main() -> Result<()> {
 
     sleep(Duration::from_secs(1));
 
-    println!("{}", client_rc.lock().unwrap().dump_sensors()?);
+    log::info!("Sensor Dump:\n{}", client_rc.lock().unwrap().dump_sensors()?);
 
     Ok(())
 }
