@@ -1,7 +1,7 @@
 use eyre::{eyre, OptionExt};
 
-use futures::StreamExt;
 use futures::executor::block_on;
+use futures::StreamExt;
 
 use paho_mqtt as mqtt;
 
@@ -120,7 +120,6 @@ impl MqttClientWrapper {
         if self.event_signal.count() == 1 {
             return Err(eyre!("Multiple subscribers are not supported"));
         }
-        // TODO unsubscribe before
         self.event_client.subscribe(topic, mqtt::QOS_1).wait()?;
         let weak_signal = self.event_signal.weak();
         self.event_client.set_message_callback(move |_, msg| {

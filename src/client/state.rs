@@ -158,6 +158,9 @@ pub enum SensorStateEvent {
     SensorUpdated {
         sensor_id: Uuid,
     },
+    SensorMetricsUpdated {
+        sensor_id: Uuid,
+    },
 
     SensorDeleted {
         sensor_id: Uuid,
@@ -489,6 +492,18 @@ impl SensorState {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#534-delete
         if let Some(sensor_id) = response.get_id(1) {
             if response.get_message() == "Sensor was deleted." {
+                self.unsubscribe_from_sensor_events(&sensor_id);
+                for metric_id in self.sensors[&sensor_id]
+                    .metrics
+                    .iter()
+                    .map(|m| m.metric_id().clone())
+                    .collect::<Vec<Uuid>>()
+                {
+                    self.unassign_callback(&MqttRequest::MetricDescribe {
+                        sensor_id: &sensor_id,
+                        metric_id: &metric_id,
+                    });
+                }
                 self.sensors.remove(&sensor_id);
                 self.state_event
                     .emit(SensorStateEvent::SensorDeleted { sensor_id });
@@ -588,12 +603,10 @@ impl SensorState {
     }
     fn cb_event_metric_update(&mut self, response: MqttResponse) -> Result<bool> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
-        // Similar story to `cb_event_sensor_update`
-
         if let Some(sensor_id) = response.get_id(1) {
             if response.get_message() == "All metrics were successfully modified." {
                 self.state_event
-                    .emit(SensorStateEvent::SensorUpdated { sensor_id });
+                    .emit(SensorStateEvent::SensorMetricsUpdated { sensor_id });
             }
         }
 
@@ -618,7 +631,7 @@ impl SensorState {
 
     fn cb_event_livedata(&mut self, topic: String, message: String) -> Result<bool> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#52-get-metric-values
-        let response = MqttResponse::Ok {topic, message};
+        let response = MqttResponse::Ok { topic, message };
         if let Some(sensor_id) = response.get_id(1) {
             let message = response.get_message();
             let value_updates =

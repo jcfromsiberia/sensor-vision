@@ -153,11 +153,25 @@ impl SensorVisionClient {
                 )
                 .expect("Failed to send message");
             }
-            // There is no other way to get sensor/metric update details
-            // rather than loading all the sensor again :(
             SensorStateEvent::SensorUpdated { .. } => {
-                // TODO Fire UI Event
-                self.load_sensors().expect("Failed to load sensors");
+                // There is no other way to get sensor/metric update details
+                // rather than reloading all the sensors again :(
+                self.load_sensors().expect("Failed to reload sensors");
+            }
+            SensorStateEvent::SensorMetricsUpdated { sensor_id } => {
+                let metric_ids = self.state.read().unwrap().sensors[&sensor_id].metrics.iter()
+                    .map(|m| m.metric_id().clone())
+                    .collect::<Vec<Uuid>>();
+                for metric_id in metric_ids {
+                    self.async_raw_message(
+                        &MqttRequest::MetricDescribe {
+                            sensor_id: &sensor_id,
+                            metric_id: &metric_id,
+                        },
+                        None,
+                    )
+                        .expect("Failed to send message");
+                }
             }
             SensorStateEvent::SensorDeleted { .. } => {
                 // TODO Fire UI Event
