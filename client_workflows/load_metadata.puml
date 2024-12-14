@@ -12,7 +12,7 @@ participant "Mosquitto Broker" as Broker
 participant "IoT Agent" as Agent
 
 == Load metadata ==
--> Client ++: load_sensors
+--> Client ++: load_sensors
 Client -> Mqtt --++: async_message to /v1.0/<ConnectorID>/sensor/list "{}"
 note over Mqtt
 From now on all /v1.0/<ConnectorID>
@@ -30,43 +30,78 @@ Broker <-- Agent ++--: Post to /inventory/inbox\n[metadata]
 Mqtt <-- Broker --: <forward>
 State <-- Mqtt --++: Call mqtt_callback\n[topic], [message]
 State -> State ++: Call SensorList callback
-State -> State ++--: Create new Sensor entries\n+[sensor_id]\n+[metric_id]
 loop for each sensor
-note over State
-Enable subscriptions to the
-following sensor-aware and
-metric-aware response topics
-using Sensor ID and Metric ID:
-* [[https://docs-iot.teamviewer.com/mqtt-api/#533-update Sensor/Update]]
-* [[https://docs-iot.teamviewer.com/mqtt-api/#534-delete Sensor/Delete]]
+    alt Sensor exists in the state?
+        note over State
+        Doing it here as there is no other way to
+        detect when concrete metric has been deleted,
+        see [[https://docs-iot.teamviewer.com/mqtt-api/#544-delete MetricDelete]]
+        end note
+        State -> State : Check if some metrics\nare gone
+        loop for each deleted metric
+            State -> State : Unsubscribe from\n[[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
+            State -> State : Delete metric entry
+            Client <-- State ++: Fire MetricDeleted Event\n[sensor_id]\n[metric_id]
+            <-- Client --: Fire MetricDeleted Event
+        end loop
+        alt Sensor name changed
+            State -> State : Change sensor name
+            Client <-- State ++: Fire SensorNameChanged Event\n[sensor_id]\n[new_name]
+            <-- Client --: Fire SensorNameChanged Event
+        end alt
+        note left State
+        Linked Metric is a metric with no
+        metadata, only Metric ID and Link.
+        See [[https://docs-iot.teamviewer.com/mqtt-api/#532-list SensorList]] response
+        end note
+        Client <-- State ++: Fire ExistingLinkedSensorLoaded Event\n[sensor_id]\n[array<linked_metric>]
+        note over Client: Same as NewLinkedSensorLoaded below
+        deactivate Client
+    else It's a new Sensor
+        State -> State ++--: Create new Sensor entry\n+[sensor_id]\n+[metric_id]
+        note over State
+        Enable subscriptions to the
+        following sensor-aware response
+        topics using Sensor ID:
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#533-update Sensor/Update]]
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#534-delete Sensor/Delete]]
 
-* [[https://docs-iot.teamviewer.com/mqtt-api/#541-create Metric/Create]]
-* [[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
-* [[https://docs-iot.teamviewer.com/mqtt-api/#543-update Metric/Update]]
-* [[https://docs-iot.teamviewer.com/mqtt-api/#534-delete Metric/Delete]]
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#541-create Metric/Create]]
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#543-update Metric/Update]]
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#534-delete Metric/Delete]]
 
-* [[https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values Sensor/PushValues]]
-* [[https://docs-iot.teamviewer.com/mqtt-api/#52-get-metric-values Sensor/Livedata]]
-end note
-State -> State ++--: Subscribe event sensor
-Client <-- State ++--: Fire NewLinkedSensorLoaded Event\n[sensor_id]\narray<[metric_id]>
-deactivate State
-<-- Client : Fire NewSensor Event
-loop for each Metric ID
-Client -> Mqtt --++: Post to /<sensor_id>/metric/<metric_id>/inventory "{}"
-Mqtt -> Broker --++: forward via request_client
-Broker -> Agent --++: <forward>
-note over Agent: According to [[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
-Agent -> Agent ++--: Render JSON
-Broker <-- Agent --++: Post to /<sensor_id>/metric/<metric_id>/inventory/inbox\n[metadata]
-Mqtt <-- Broker --++: <forward>
-State <-- Mqtt ++: Call mqtt_callback\n[topic]\n[message]
-State -> State ++: Call MetricDescribe callback
-State -> State ++--: Store Metric metadata
-Client <-- State --++: Fire NewMetricLoaded Event\n[sensor_id]\n[metric]
-<-- Client --: Fire NewMetric Event
-deactivate State
-end
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values Sensor/PushValues]]
+        * [[https://docs-iot.teamviewer.com/mqtt-api/#52-get-metric-values Sensor/Livedata]]
+        end note
+        State -> State ++--: Subscribe for sensor events
+        loop for each Linked Metric ID
+            note over State
+            Enable subscriptions to the
+            following metric-aware response
+            topics using Sensor ID and Metric ID:
+            * [[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
+            end note
+            State -> State ++--: Subscribe for metric events
+        end loop
+        Client <-- State ++--: Fire NewLinkedSensorLoaded Event\n[sensor_id]\n[array<linked_metric>]>
+        deactivate State
+        <-- Client : Fire NewSensor Event
+        loop for each Metric ID
+            Client -> Mqtt --++: Post to /<sensor_id>/metric/<metric_id>/inventory "{}"
+            Mqtt -> Broker --++: forward via request_client
+            Broker -> Agent --++: <forward>
+            note over Agent: According to [[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
+            Agent -> Agent ++--: Render JSON
+            Broker <-- Agent --++: Post to /<sensor_id>/metric/<metric_id>/inventory/inbox\n[metadata]
+            Mqtt <-- Broker --++: <forward>
+            State <-- Mqtt ++: Call mqtt_callback\n[topic]\n[message]
+            State -> State ++: Call MetricDescribe callback
+            State -> State ++--: Store Metric metadata
+            Client <-- State --++: Fire NewMetricLoaded Event\n[sensor_id]\n[metric]
+            <-- Client --: Fire NewMetric Event
+            deactivate State
+        end loop
+    end alt
 end
 
 @enduml

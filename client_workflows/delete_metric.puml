@@ -1,0 +1,33 @@
+@startuml
+
+!theme toy
+
+box SensorVision App #grey
+    participant SensorVisionClient as Client
+    participant MetadataState as State
+    participant MqttClientWrapper as Mqtt
+end box
+
+participant "Mosquitto Broker" as Broker
+participant "IoT Agent" as Agent
+
+== Delete Metric ==
+--> Client ++: delete_metric\n[sensor_id]\n[metric_id]
+note right Client: According to [[https://docs-iot.teamviewer.com/mqtt-api/#544-delete Metric/Delete]]
+Client -> Mqtt --++: async_message to /sensor/<sensor_id>/metric/delete\n[metric_id]
+Mqtt -> Broker --++: <forward> via request_client
+Broker -> Agent --++: <forward>
+Agent -> Agent : Delete Metric
+Broker <-- Agent --++: "All metrics were successfully deleted."
+note left Agent #pink
+Very informative!
+Thanks!!! (•̀o•́)ง
+end note
+Mqtt <-- Broker --++: <forward>
+State <-- Mqtt --++: Call mqtt_callback\n[topic] [message]
+State -> State ++: Call MetricDelete\ncallback
+Client <-- State --++: Fire SensorUpdated Event\n[sensor_id]
+deactivate State
+Client -> Client ++: load_sensors
+note over Client: See load_metadata.puml
+@enduml

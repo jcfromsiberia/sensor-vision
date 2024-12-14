@@ -28,6 +28,12 @@ State -> Mqtt ++: Subscribe to /v1.0/<ConnectorID>/#\n[mqtt_callback]
 Mqtt -> Mqtt ++--: Subscribe event_client\nto /v1.0/<ConnectorID>/#
 Mqtt -> Mqtt ++--: Set message callback\nfor event_client\nas [mqtt_callback]
 State <-- Mqtt --: Subscription
+note over State
+Enable subscriptions to the following
+sensor-id-agnostic response topics:
+* [[https://docs-iot.teamviewer.com/mqtt-api/#532-list Sensor/List]]
+* [[https://docs-iot.teamviewer.com/mqtt-api/#531-create Sensor/Create]]
+end note
 State -> State ++--: Subscribe to\n/v1.0/<ConnectorID>/sensor/list\n[callback]
 State -> State ++--: Subscribe to\n/v1.0/<ConnectorID>/sensor/create\n[callback]
 Client <-- State --: <<OK>>

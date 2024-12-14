@@ -1,0 +1,42 @@
+@startuml
+
+!theme toy
+
+box SensorVision App #grey
+    participant SensorVisionClient as Client
+    participant MetadataState as State
+    participant MqttClientWrapper as Mqtt
+end box
+
+participant "Mosquitto Broker" as Broker
+participant "IoT Agent" as Agent
+
+== Describe Metric ==
+note right Client: According to [[https://docs-iot.teamviewer.com/mqtt-api/#542-describe Metric/Describe]]
+Client -> Mqtt ++--: Post to /sensor/<sensor_id>/metric/<metric_id>/inventory "{}"
+Mqtt -> Broker --++: <forward> via request_client
+Broker -> Agent --++: <forward>
+Agent -> Agent : Describe Metric
+Broker <-- Agent --++: [metadata]
+Mqtt <-- Broker --++: <forward>
+State <-- Mqtt --++: Call mqtt_callback\n[topic] [message]
+State -> State ++: Call MetricDescribe\ncallback\n[sensor_id]\n[metric_id]\n[metadata]
+State -> State ++: Merge and fire events
+alt It is a new Metric in the Sensor
+    Client <-- State ++: Fire NewMetricLoaded\n[sensor_id] [metric]
+    <-- Client --: Fire NewMetricLoaded event
+else metric exists
+    alt Metric name changed
+        Client <-- State ++: Fire MetricNameChanged\n[sensor_id]\n[metric_id]\n[name]
+        <-- Client --: Fire MetricNameChanged
+    end alt
+    alt Metric value annotation changed
+        Client <-- State ++: Fire MetricValueAnnotationChanged\n[sensor_id]\n[metric_id]\n[annotation]
+        <-- Client --: Fire MetricValueAnnotationChanged
+    end alt
+end alt
+deactivate State
+deactivate State
+deactivate State
+
+@enduml
