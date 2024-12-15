@@ -1,6 +1,3 @@
-pub mod mqtt;
-pub mod state;
-
 use eyre::{eyre, Result, WrapErr};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +6,9 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::thread;
 use std::thread::JoinHandle;
 use uuid::Uuid;
+
+pub mod mqtt;
+pub mod state;
 
 use crate::client::mqtt::MqttClientWrapper;
 use crate::client::state::{MqttRequest, SensorState, SensorStateEvent};
@@ -99,6 +99,10 @@ impl SensorVisionClient {
         Ok(result)
     }
 
+    pub fn get_state(&self) -> Arc<RwLock<SensorState>> {
+        self.state.clone()
+    }
+
     pub fn ping_test(&mut self) -> Result<()> {
         // According to https://docs-iot.teamviewer.com/mqtt-api/#42-connection-check
         log::trace!("Ping test");
@@ -115,7 +119,7 @@ impl SensorVisionClient {
     }
 
     fn state_event_handler(&mut self, event: SensorStateEvent) {
-        log::trace!("Receive State Event: {:?}", event);
+        log::trace!("Receive State Event:\n\t{:?}", event);
         match &event {
             SensorStateEvent::NewLinkedSensorLoaded(linked_sensor) => {
                 // TODO Fire UI Event

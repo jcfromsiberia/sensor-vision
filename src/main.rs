@@ -15,15 +15,19 @@ use x509_certificate::X509Certificate;
 use clap::{arg, command, ArgAction};
 
 use uuid::Uuid;
+use widgetui::App;
 
 mod model;
 mod client;
+mod app;
 
 use client::SensorVisionClient;
 use client::mqtt::{setup_new_certificate, MqttClientWrapper};
 
 use model::sensor::{Metric, ValueUnit, ValueType};
 use model::protocol::MetricValue;
+use crate::app::AppState;
+use crate::app::render::render_sensor_vision;
 
 fn main() -> Result<()> {
     // TODO Add log rotation, see log4rs examples
@@ -73,9 +77,9 @@ fn main() -> Result<()> {
         client.load_sensors()?;
     }
     // Wait while sensors being loaded
-    sleep(Duration::from_secs(1));
 
     if matches.get_flag("test") {
+        sleep(Duration::from_secs(1));
         let mut client = client_rc.lock().unwrap();
         // client.create_sensor("Sensor08122024")?;
 
@@ -112,9 +116,12 @@ fn main() -> Result<()> {
         // client.delete_metric(&sensor_id, &metric_id)?;
     }
 
-    sleep(Duration::from_secs(1));
+    // sleep(Duration::from_secs(1));
 
     log::info!("Sensor Dump:\n{}", client_rc.lock().unwrap().dump_sensors()?);
+
+    let app_state = AppState::new(&client_rc);
+    App::new(100)?.states(app_state).widgets(render_sensor_vision).run()?;
 
     Ok(())
 }
