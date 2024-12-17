@@ -26,7 +26,7 @@ use client::mqtt::{setup_new_certificate, MqttClientWrapper};
 
 use model::sensor::{Metric, ValueUnit, ValueType};
 use model::protocol::MetricValue;
-use crate::app::AppState;
+use crate::app::AppStateWrapper;
 use crate::app::render::render_sensor_vision;
 
 fn main() -> Result<()> {
@@ -81,9 +81,9 @@ fn main() -> Result<()> {
     if matches.get_flag("test") {
         sleep(Duration::from_secs(1));
         let mut client = client_rc.lock().unwrap();
-        // client.create_sensor("Sensor08122024")?;
+        client.create_sensor("Sensor17122024")?;
 
-        let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
+        // let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
         // client.delete_sensor(&sensor_id)?;
 
         // {
@@ -107,20 +107,21 @@ fn main() -> Result<()> {
         //     ),
         // ];
         // client.create_metrics(&sensor_id, &metrics)?;
-        let metric_id = client.metric_id_by_name(&sensor_id, "CPUUsage").unwrap();
+        // let metric_id = client.metric_id_by_name(&sensor_id, "CPUUsage").unwrap();
         //
-        client.push_value(&sensor_id, &metric_id, &MetricValue::Double(64f64), None)?;
+        // client.push_value(&sensor_id, &metric_id, &MetricValue::Double(64f64), None)?;
 
         // client.update_metric(&sensor_id, &metric_id, None, Some("goods per minute"))?;
         // client.update_sensor(&sensor_id, "Sensor09122024", None)?;
         // client.delete_metric(&sensor_id, &metric_id)?;
+        return Ok(());
     }
 
     // sleep(Duration::from_secs(1));
 
     log::info!("Sensor Dump:\n{}", client_rc.lock().unwrap().dump_sensors()?);
 
-    let app_state = AppState::new(&client_rc);
+    let app_state = AppStateWrapper::new(&client_rc);
     App::new(100)?.states(app_state).widgets(render_sensor_vision).run()?;
 
     Ok(())

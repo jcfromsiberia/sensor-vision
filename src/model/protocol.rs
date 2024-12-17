@@ -36,6 +36,7 @@ impl<T> MetricsArrayRequest<T> {
 #[derive(Debug, Deserialize)]
 pub struct MetricsArrayResponse<T> {
     pub metrics: Vec<T>,
+    pub timestamp: Option<u64>,
 }
 
 #[serde_as]

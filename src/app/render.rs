@@ -1,26 +1,26 @@
-use crate::app::{AppSharedUIState, AppState};
+use crate::app::AppStateWrapper;
 use crate::model::sensor::{Metric, Sensor, ValueType, ValueUnit};
 use crate::model::ToMqttId;
-use crossterm::event::KeyCode;
+use crossterm::event::{Event, KeyCode};
 use ratatui::layout::Constraint::Ratio;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::symbols;
 use ratatui::symbols::border;
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, List, ListItem, Paragraph, RenderDirection, Sparkline,
-    SparklineBar, Tabs, Widget,
+    Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph
+    , Tabs,
 };
-use std::collections::VecDeque;
 use uuid::Uuid;
 use widgetui::{constraint, layout, Chunks, Events, ResMut, WidgetFrame, WidgetResult};
+use crate::app::ui_state::{MetricLivedataWindow, UIState};
 
 struct AppArea;
 struct SensorArea;
 pub fn render_sensor_vision(
     mut frame: ResMut<WidgetFrame>,
-    mut app_state: ResMut<AppState>,
+    mut state_wrapper: ResMut<AppStateWrapper>,
     mut events: ResMut<Events>,
     mut chunks: ResMut<Chunks>,
 ) -> WidgetResult {
@@ -37,23 +37,31 @@ pub fn render_sensor_vision(
 
     // TODO Fetch name and version from Cargo.toml
     let app_title = Line::from(format!("{} v{}", "SensorVision", "0.1.0").bold());
+    let instructions = Line::from(vec![
+        " Next Sensor ".into(),
+        "<Tab>".blue().bold(),
+        " Quit ".into(),
+        "<q> ".blue().bold(),
+    ]);
     let app_pad = Block::bordered()
         .title(app_title.centered())
+        .title_bottom(instructions.centered())
         .border_set(border::THICK);
 
-    let mut ui_state_snapshot = app_state.ui_state.read().unwrap().clone();
-    ui_state_snapshot.current_sensor_index = Some(0);
+    let (sensors_snapshot, ui_state_snapshot) = {
+        let app_state = state_wrapper.app_state.read().unwrap();
+        let sensors = app_state.state.read().unwrap().sensors.clone();
+        let ui_state = app_state.ui_state.clone();
+        (sensors, ui_state)
+    };
 
-    // Read lock
-    let state = &app_state.state.read().unwrap();
-
-    if state.sensors.is_empty() {
+    if sensors_snapshot.is_empty() {
         // TODO render empty state
+        return Ok(());
     }
 
     let sensor_tabs = Tabs::new(
-        state
-            .sensors
+        sensors_snapshot
             .iter()
             .map(|(_, sensor)| sensor.name.clone())
             .collect::<Vec<_>>(),
@@ -66,15 +74,30 @@ pub fn render_sensor_vision(
     frame.render_widget(sensor_tabs, app_area);
 
     if let Some(current_sensor) = ui_state_snapshot.current_sensor_index {
-        let (_, current_sensor) = state.sensors.iter().nth(current_sensor).unwrap();
+        let (_, current_sensor) = sensors_snapshot.iter().nth(current_sensor).unwrap();
         render_sensor(&mut frame, &chunks, &ui_state_snapshot, current_sensor)?;
     }
 
-    if events.key(KeyCode::Char('q')) {
-        events.register_exit();
-    }
+    // render dialogs
+
+    handle_events(&mut events, &mut state_wrapper);
 
     Ok(())
+}
+
+fn handle_events(events: &mut ResMut<Events>, state_wrapper: &mut ResMut<AppStateWrapper>) {
+    if let Some(event) = &events.event {
+        match event {
+            Event::Key(key_event) if key_event.code == KeyCode::Char('q') => {
+                events.register_exit();
+            },
+            Event::Key(key_event) if key_event.code == KeyCode::Tab => {
+                let mut app_state = state_wrapper.app_state.write().unwrap();
+                app_state.next_sensor();
+            },
+            _ => {}
+        }
+    }
 }
 
 trait Emojified {
@@ -134,7 +157,7 @@ impl Emojified for ValueType {
 fn render_sensor(
     frame: &mut ResMut<WidgetFrame>,
     chunks: &ResMut<Chunks>,
-    ui_state: &AppSharedUIState,
+    ui_state: &UIState,
     sensor: &Sensor<Metric>,
 ) -> WidgetResult {
     let sensor_area = chunks.get_chunk::<SensorArea>()?;
@@ -177,6 +200,7 @@ fn render_sensor(
     // layout! cannot do that :(
     let metrics_areas = Layout::default()
         .direction(Direction::Horizontal)
+        // TODO Consider limiting metrics in a row
         .constraints(vec![Ratio(1, metrics_count as u32); metrics_count])
         .split(vbox[1][0]);
     for i in 0..metrics_count {
@@ -196,13 +220,13 @@ fn render_sensor(
 fn render_metric(
     frame: &mut ResMut<WidgetFrame>,
     area: &Rect,
-    ui_state: &AppSharedUIState,
+    ui_state: &UIState,
     metric: &Metric,
     sensor_id: &Uuid,
 ) -> WidgetResult {
     let mut list_items = Vec::<ListItem>::new();
-    let mut id: String;
-    let mut name: String;
+    let id: String;
+    let name: String;
 
     match metric {
         Metric::Predefined {
@@ -266,11 +290,19 @@ fn render_metric(
 
     let key = (*sensor_id, *metric.metric_id());
 
+    {
+        let mut x = MetricLivedataWindow::default();
+        x.push_data(1734280090215, 55.0);
+        x.push_data(1724280090216, 56.9);
+        x.push_data(1734280090218, 99.0);
+        x.push_data(1734280090213, 25.0);
+        render_numeric_livedata(frame, &vbox[1][0], &x, "Percent")?;
+    }
+
     match metric {
         Metric::Predefined { value_unit, .. } => {
-            if let Some(data) = ui_state.livedata_double.get(&key) {
+            if let Some(data) = ui_state.livedata.get(&key) {
                 let annotation = format!("{:?}", value_unit);
-                let data = data.iter().map(|v| *v as u64).collect::<Vec<_>>();
                 render_numeric_livedata(frame, &vbox[1][0], &data, &annotation)?;
             }
         }
@@ -280,21 +312,8 @@ fn render_metric(
             ..
         } => {
             match value_type {
-                ValueType::Double => {
-                    if let Some(data) = ui_state.livedata_double.get(&key) {
-                        let data = data.iter().map(|v| *v as u64).collect::<Vec<_>>();
-                        render_numeric_livedata(frame, &vbox[1][0], &data, &value_annotation)?;
-                    }
-                }
-                ValueType::Integer => {
-                    if let Some(data) = ui_state.livedata_integer.get(&key) {
-                        let data = data.iter().map(|v| *v as u64).collect::<Vec<_>>();
-                        render_numeric_livedata(frame, &vbox[1][0], &data, &value_annotation)?;
-                    }
-                }
-                ValueType::Boolean => {
-                    if let Some(data) = ui_state.livedata_boolean.get(&key) {
-                        let data = data.iter().map(|v| *v as u64).collect::<Vec<_>>();
+                ValueType::Double | ValueType::Integer | ValueType::Integer => {
+                    if let Some(data) = ui_state.livedata.get(&key) {
                         render_numeric_livedata(frame, &vbox[1][0], &data, &value_annotation)?;
                     }
                 }
@@ -310,18 +329,44 @@ fn render_metric(
 fn render_numeric_livedata(
     frame: &mut ResMut<WidgetFrame>,
     area: &Rect,
-    data: &Vec<u64>,
+    livedata_window: &MetricLivedataWindow,
     annotation: &str,
 ) -> WidgetResult {
-    let values_chart = Sparkline::default()
-        .block(Block::bordered().title(Line::from(annotation).centered()))
-        .data(data)
-        .direction(RenderDirection::LeftToRight)
-        .style(Style::default().red().on_white())
-        .absent_value_style(Style::default().fg(Color::Red))
-        .absent_value_symbol(symbols::shade::FULL);
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().light_green())
+            .data(&livedata_window.data),
+        Dataset::default()
+            .marker(symbols::Marker::Dot)
+            .graph_type(GraphType::Scatter)
+            .style(Style::default().red())
+            .data(&livedata_window.data),
+    ];
 
-    frame.render_widget(values_chart, *area);
+    let x_axis = Axis::default()
+        .style(Style::default().white())
+        .bounds([livedata_window.min_timestamp, livedata_window.max_timestamp])
+        .labels([livedata_window.min_timestamp_str.clone(), livedata_window.max_timestamp_str.clone()]);
+
+    let y_axis = Axis::default()
+        .title(annotation.red())
+        .style(Style::default().white())
+        .bounds([livedata_window.min_value, livedata_window.max_value])
+        .labels([livedata_window.min_value_str.clone(), livedata_window.max_value_str.clone()]);
+
+    let chart_block = Block::default()
+        .borders(Borders::ALL)
+        .title(Line::from(Span::styled("Livedata", Style::default().fg(Color::Red))).centered())
+        .border_type(BorderType::QuadrantOutside);
+
+    let chart = Chart::new(datasets)
+        .block(chart_block)
+        .x_axis(x_axis)
+        .y_axis(y_axis);
+
+    frame.render_widget(chart, centered_area(96, 96, *area));
     Ok(())
 }
 

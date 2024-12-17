@@ -190,6 +190,7 @@ pub enum SensorStateEvent {
         sensor_id: Uuid,
         metric_id: Uuid,
         value: MetricValue,
+        timestamp: u64,
     },
 }
 
@@ -686,6 +687,7 @@ impl SensorState {
                     sensor_id: sensor_id.clone(),
                     metric_id: value_update.metric_id,
                     value: value_update.value,
+                    timestamp: value_updates.timestamp.unwrap(),
                 });
             }
         }

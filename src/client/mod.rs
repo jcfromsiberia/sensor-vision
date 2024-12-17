@@ -7,6 +7,8 @@ use std::thread;
 use std::thread::JoinHandle;
 use uuid::Uuid;
 
+use signals2::{Connect1, Emit1};
+
 pub mod mqtt;
 pub mod state;
 
@@ -31,6 +33,7 @@ pub struct SensorVisionClient {
 
     event_stream_thread: Option<JoinHandle<()>>,
     state_event_connection: Option<signals2::Connection>,
+    state_event_forwarded: signals2::Signal<(SensorStateEvent,)>,
     weak_self: Weak<Mutex<SensorVisionClient>>,
 }
 
@@ -62,6 +65,7 @@ impl SensorVisionClient {
             state: state.clone(),
             event_stream_thread: None,
             state_event_connection: None,
+            state_event_forwarded: signals2::Signal::new(),
             weak_self: Weak::new(),
         }));
         let weak_self = Arc::downgrade(&result);
@@ -118,10 +122,18 @@ impl SensorVisionClient {
         }
     }
 
+    pub fn subscribe_to_state_events<Slot>(&mut self, slot: Slot) -> Result<signals2::Connection>
+    where
+        Slot: Fn(SensorStateEvent) + Send + Sync + 'static,
+    {
+        Ok(self.state_event_forwarded.connect(slot))
+    }
+
     fn state_event_handler(&mut self, event: SensorStateEvent) {
         log::trace!("Receive State Event:\n\t{:?}", event);
         match &event {
-            SensorStateEvent::NewLinkedSensorLoaded(linked_sensor) => {
+            SensorStateEvent::NewLinkedSensorLoaded(linked_sensor)
+            | SensorStateEvent::ExistingLinkedSensorLoaded(linked_sensor) => {
                 // TODO Fire UI Event
                 for linked_metric in &linked_sensor.metrics {
                     self.async_raw_message(
@@ -133,30 +145,11 @@ impl SensorVisionClient {
                     )
                     .expect("Failed to send message");
                 }
-            }
-            SensorStateEvent::ExistingLinkedSensorLoaded(linked_sensor) => {
-                for linked_metric in &linked_sensor.metrics {
-                    self.async_raw_message(
-                        &MqttRequest::MetricDescribe {
-                            sensor_id: &linked_sensor.sensor_id,
-                            metric_id: &linked_metric.metric_id,
-                        },
-                        None,
-                    )
-                    .expect("Failed to send message");
-                }
-            }
-            SensorStateEvent::NewSensorCreated(..) => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::NewMetricLoaded { .. } => {
-                // TODO Fire UI Event
             }
             SensorStateEvent::NewMetricCreated {
                 sensor_id,
                 metric_id,
             } => {
-                // TODO Fire UI Event
                 self.async_raw_message(
                     &MqttRequest::MetricDescribe {
                         sensor_id,
@@ -188,25 +181,9 @@ impl SensorVisionClient {
                     .expect("Failed to send message");
                 }
             }
-            SensorStateEvent::SensorDeleted { .. } => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::MetricDeleted { .. } => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::SensorNameChanged { .. } => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::MetricNameChanged { .. } => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::MetricValueAnnotationChanged { .. } => {
-                // TODO Fire UI Event
-            }
-            SensorStateEvent::Livedata { .. } => {
-                // TODO Fire UI Event
-            }
-        }
+            _ => {}
+        };
+        self.state_event_forwarded.emit(event);
     }
 
     pub fn sensor_id_by_name(&self, sensor_name: &str) -> Option<Uuid> {
