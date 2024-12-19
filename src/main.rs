@@ -81,9 +81,10 @@ fn main() -> Result<()> {
     if matches.get_flag("test") {
         sleep(Duration::from_secs(1));
         let mut client = client_rc.lock().unwrap();
-        client.create_sensor("Sensor17122024")?;
+        client.create_sensor("Sensor19122024")?;
+        // client.create_sensor("Sensor18122024")?;
 
-        // let sensor_id = client.sensor_id_by_name("Sensor08122024").unwrap();
+        // let sensor_id = client.sensor_id_by_name("Sensor18122024").unwrap();
         // client.delete_sensor(&sensor_id)?;
 
         // {
