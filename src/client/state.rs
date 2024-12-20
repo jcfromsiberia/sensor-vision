@@ -216,7 +216,7 @@ impl SensorState {
             "Create Sensor State with Connector({})",
             connector_id.to_mqtt()
         );
-        let mut result = Arc::new(RwLock::new(Self {
+        let result = Arc::new(RwLock::new(Self {
             connector_id,
             sensors: HashMap::new(),
             topic_callbacks: HashMap::new(),

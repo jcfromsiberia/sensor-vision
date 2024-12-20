@@ -381,20 +381,20 @@ fn render_metric(
                 ..
             } => {
                 match value_type {
-                    ValueType::Double | ValueType::Integer | ValueType::Integer => {
+                    ValueType::Double | ValueType::Integer | ValueType::Boolean => {
                         let annotation = format!("{:?}", value_annotation);
                         frame.render_widget(
                             numeric_livedata_chart(&livedata, &annotation),
                             vbox[1][0],
                         );
-                    }
+                    },
                     // TODO Render string chart
                     _ => {}
                 };
             }
         };
     } else {
-        let no_data = Line::from("NO DATA").magenta().bold();
+        let no_data = Line::from("NO DATA").magenta().bold().centered();
         frame.render_widget(no_data, vbox[1][0]);
     }
 

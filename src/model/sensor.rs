@@ -1,7 +1,10 @@
+use eyre::Result;
+
 use serde::{Deserialize, Serialize};
 use serde_valid::Validate;
 
 use uuid::Uuid;
+use crate::model::protocol::MetricValue;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ValueUnit {
@@ -91,6 +94,17 @@ pub enum ValueType {
 
     #[serde(rename = "string")]
     String,
+}
+
+impl ValueType {
+    pub fn to_value(&self, value: &str) -> Result<MetricValue> {
+        match self {
+            Self::Double => Ok(MetricValue::Double(value.parse()?)),
+            Self::Integer => Ok(MetricValue::Integer(value.parse()?)),
+            Self::Boolean => Ok(MetricValue::Boolean(value.parse()?)),
+            Self::String => Ok(MetricValue::String(value.to_owned())),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Validate)]
@@ -204,162 +218,4 @@ impl Default for Metric {
             metric_id: Uuid::nil(),
         }
     }
-}
-
-impl Sensor<Metric> {
-    // pub fn create_metrics(&mut self, metrics: Vec<Metric>) -> Result<Vec<Uuid>> {
-    //     // https://docs-iot.teamviewer.com/mqtt-api/#541-create
-    //     #[serde_as]
-    //     #[derive(Debug, Serialize)]
-    //     struct CreateMetricPayload {
-    //         #[serde(flatten)]
-    //         metric: Metric,
-    //
-    //         #[serde_as(as = "DisplayFromStr")]
-    //         #[serde(rename = "matchingId")]
-    //         matching_id: usize,
-    //     }
-    //
-    //     #[serde_as]
-    //     #[derive(Deserialize)]
-    //     struct CreateMetricResponsePayload {
-    //         #[serde_as(as = "DisplayFromStr")]
-    //         #[serde(rename = "matchingId")]
-    //         matching_id: usize,
-    //
-    //         #[serde(rename = "metricId")]
-    //         #[serde(with = "uuid::serde::simple")]
-    //         metric_id: Uuid,
-    //     }
-    //
-    //     let request = MetricsRequest::<CreateMetricPayload> {
-    //         metrics: metrics
-    //             .iter()
-    //             .enumerate()
-    //             .map(|(i, &ref metric)| CreateMetricPayload {
-    //                 metric: metric.clone(),
-    //                 matching_id: i + 1,
-    //             })
-    //             .collect(),
-    //     };
-    //
-    //     let request_serialized = serde_json::to_string(&request)?;
-    //
-    //     // According to https://docs-iot.teamviewer.com/mqtt-api/#541-create
-    //     let response_serialized = {
-    //         let state_shared_ptr = self.parent.upgrade().ok_or_eyre("State is null")?;
-    //         let mut state = state_shared_ptr.borrow_mut();
-    //         state.sync_action(
-    //             Action::MetricCreate(&self.sensor_id),
-    //             Some(request_serialized),
-    //         )?
-    //     };
-    //
-    //     // println!("{response_serialized}");
-    //
-    //     let metrics_created =
-    //         serde_json::from_str::<Vec<CreateMetricResponsePayload>>(&response_serialized)
-    //             .wrap_err_with(|| format!("Failed to deserialize: {}", &response_serialized))?;
-    //
-    //     if metrics_created.len() == metrics.len() {
-    //         let mut metrics = metrics;
-    //
-    //         let metric_ids = metrics_created
-    //             .iter()
-    //             .map(|metric| metric.metric_id.clone())
-    //             .collect();
-    //
-    //         for metric_created in metrics_created {
-    //             match &mut metrics[metric_created.matching_id - 1] {
-    //                 Metric::Predefined {
-    //                     metric_id,
-    //                     name: _,
-    //                     value_unit: _,
-    //                 } => *metric_id = metric_created.metric_id.clone(),
-    //                 Metric::Custom {
-    //                     metric_id,
-    //                     name: _,
-    //                     value_type: _,
-    //                     value_annotation: _,
-    //                 } => *metric_id = metric_created.metric_id.clone(),
-    //             }
-    //         }
-    //
-    //         self.metrics.extend(metrics);
-    //         Ok(metric_ids)
-    //     } else {
-    //         Err(eyre!("Size mismatch"))
-    //     }
-    // }
-    //
-    // pub fn update_metric<'a>(
-    //     &mut self,
-    //     metric_id: &Uuid,
-    //     name: Option<&'a str>,
-    //     value_annotation: Option<&'a str>,
-    // ) -> Result<String> {
-    //     // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
-    //     #[derive(Debug, Serialize)]
-    //     struct UpdateMetricRequest<'b> {
-    //         #[serde(rename = "metricId")]
-    //         metric_id: String,
-    //
-    //         name: Option<&'b str>,
-    //
-    //         #[serde(rename = "valueAnnotation")]
-    //         value_annotation: Option<&'b str>,
-    //     }
-    //
-    //     let request = MetricsRequest::<UpdateMetricRequest> {
-    //         metrics: vec![UpdateMetricRequest {
-    //             metric_id: metric_id.as_simple().to_string(),
-    //             name,
-    //             value_annotation,
-    //         }],
-    //     };
-    //
-    //     let request_serialized = serde_json::to_string(&request)?;
-    //
-    //     let state_shared_ptr = self.parent.upgrade().ok_or_eyre("State is null")?;
-    //     let mut state = state_shared_ptr.borrow_mut();
-    //     let result = state.sync_action(
-    //         Action::MetricUpdate(&self.sensor_id),
-    //         Some(request_serialized),
-    //     )?;
-    //
-    //     // TODO Async Subscribe to metric metadata topic(s) to avoid checking the result
-    //     // and modifying data here
-    //
-    //     // TODO Update local metric!!
-    //
-    //     Ok(result)
-    // }
-    //
-    // pub fn delete_metric(&mut self, metric_id: &Uuid) -> Result<String> {
-    //     // According to https://docs-iot.teamviewer.com/mqtt-api/#544-delete
-    //     #[derive(Debug, Serialize)]
-    //     struct DeleteMetricRequest {
-    //         #[serde(rename = "metricId")]
-    //         metric_id: String,
-    //     }
-    //
-    //     let request = MetricsRequest::<DeleteMetricRequest> {
-    //         metrics: vec![DeleteMetricRequest {
-    //             metric_id: metric_id.as_simple().to_string(),
-    //         }],
-    //     };
-    //
-    //     let request_serialized = serde_json::to_string(&request)?;
-    //
-    //     let state_shared_ptr = self.parent.upgrade().ok_or_eyre("State is null")?;
-    //     let mut state = state_shared_ptr.borrow_mut();
-    //     let result = state.sync_action(Action::MetricDelete(&self.sensor_id), None)?;
-    //
-    //     // TODO Async Subscribe to metric metadata topic(s) to avoid checking the result
-    //     // and modifying data here
-    //
-    //     // TODO Delete local metric!!
-    //
-    //     Ok(result)
-    // }
 }

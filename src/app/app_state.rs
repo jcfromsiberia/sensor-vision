@@ -5,7 +5,6 @@ use crate::client::SensorVisionClient;
 use crate::model::ToMqttId;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
-use crate::model::protocol::MetricValue;
 use crate::model::sensor::{Metric, ValueType};
 
 #[derive(Clone)]
@@ -238,45 +237,18 @@ impl AppState {
                 let accept_callback: Box<dyn Fn(String) + Send + Sync> =
                     Box::new(move |new_value| {
                         if let Some(client) = weak_client.upgrade() {
-                            // FIXME Get rid of copy-pasta
                             let metric_value = match &metric {
-                                Metric::Predefined { .. } => {
-                                    let parsed = new_value.parse::<f64>();
-                                    if let Err(err) = &parsed {
-                                        log::error!("{err}");
-                                        return;
-                                    }
-                                    MetricValue::Double(parsed.unwrap())
-                                }
-                                Metric::Custom { value_type, .. } => match value_type {
-                                    ValueType::Double => {
-                                        let parsed = new_value.parse::<f64>();
-                                        if let Err(err) = &parsed {
-                                            log::error!("{err}");
-                                            return;
-                                        }
-                                        MetricValue::Double(parsed.unwrap())
-                                    }
-                                    ValueType::Integer => {
-                                        let parsed = new_value.parse::<i64>();
-                                        if let Err(err) = &parsed {
-                                            log::error!("{err}");
-                                            return;
-                                        }
-                                        MetricValue::Integer(parsed.unwrap())
-                                    }
-                                    ValueType::Boolean => {
-                                        let parsed = new_value.parse::<bool>();
-                                        if let Err(err) = &parsed {
-                                            log::error!("{err}");
-                                            return;
-                                        }
-                                        MetricValue::Boolean(parsed.unwrap())
-                                    }
-
-                                    ValueType::String => MetricValue::String(new_value),
-                                },
+                                Metric::Predefined { .. } =>
+                                    ValueType::Double.to_value(&new_value),
+                                Metric::Custom { value_type, .. } =>
+                                    value_type.to_value(&new_value),
                             };
+                            if let Err(err) = &metric_value {
+                                log::error!("Failed to parse \"{new_value}\": {err}");
+                                return;
+                            }
+
+                            let metric_value = metric_value.unwrap();
 
                             if let Err(err) = client.lock().unwrap().push_value(
                                 &sensor_id,
