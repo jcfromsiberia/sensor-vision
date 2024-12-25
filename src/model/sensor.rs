@@ -3,10 +3,10 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_valid::Validate;
 
-use uuid::Uuid;
 use crate::model::protocol::MetricValue;
+use crate::model::*;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ValueUnit {
     #[serde(rename = "SI.ElectricCurrent.AMPERE")]
     Ampere,
@@ -81,7 +81,7 @@ pub enum ValueUnit {
     Watt,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ValueType {
     #[serde(rename = "boolean")]
     Boolean,
@@ -107,25 +107,24 @@ impl ValueType {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Validate)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, Validate)]
 pub struct Sensor<T> {
     #[validate(min_length = 2)]
     #[validate(max_length = 64)]
     pub name: String,
 
     #[serde(rename = "sensorId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub sensor_id: Uuid,
+    pub sensor_id: SensorId,
 
     // TODO Spike how to get HashMap here instead of Vec
     #[serde(default)]
     pub metrics: Vec<T>,
 
     #[serde(skip)]
-    pub connector_id: Uuid,
+    pub connector_id: ConnectorId,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Validate)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, Validate)]
 #[serde(untagged)]
 pub enum Metric {
     Predefined {
@@ -134,9 +133,8 @@ pub enum Metric {
         name: String,
 
         #[serde(rename = "metricId")]
-        #[serde(with = "uuid::serde::simple")]
-        #[serde(skip_serializing_if = "Uuid::is_nil")]
-        metric_id: Uuid,
+        #[serde(skip_serializing_if = "MetricId::is_nil")]
+        metric_id: MetricId,
 
         #[serde(rename = "valueUnit")]
         value_unit: ValueUnit,
@@ -147,9 +145,8 @@ pub enum Metric {
         name: String,
 
         #[serde(rename = "metricId")]
-        #[serde(with = "uuid::serde::simple")]
-        #[serde(skip_serializing_if = "Uuid::is_nil")]
-        metric_id: Uuid,
+        #[serde(skip_serializing_if = "MetricId::is_nil")]
+        metric_id: MetricId,
 
         // TODO Add validation
         #[serde(rename = "valueAnnotation")]
@@ -165,7 +162,7 @@ impl Metric {
         Metric::Predefined {
             name,
             value_unit,
-            metric_id: Uuid::nil(),
+            metric_id: MetricId::default(),
         }
     }
 
@@ -174,7 +171,7 @@ impl Metric {
             name,
             value_type,
             value_annotation,
-            metric_id: Uuid::nil(),
+            metric_id: MetricId::default(),
         }
     }
     pub fn name(&self) -> &String {
@@ -184,7 +181,7 @@ impl Metric {
         }
     }
 
-    pub fn metric_id(&self) -> &Uuid {
+    pub fn metric_id(&self) -> &MetricId {
         match self {
             Metric::Predefined { metric_id, .. } => metric_id,
             Metric::Custom { metric_id, .. } => metric_id,
@@ -199,13 +196,12 @@ impl Metric {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Deserialize)]
 pub struct LinkedMetric {
     pub link: String,
 
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 }
 
 // TODO get rid of Default impl for Metric
@@ -215,7 +211,7 @@ impl Default for Metric {
             name: "Unknown".to_string(),
             value_type: ValueType::Integer,
             value_annotation: "Unit".to_string(),
-            metric_id: Uuid::nil(),
+            metric_id: MetricId::default(),
         }
     }
 }

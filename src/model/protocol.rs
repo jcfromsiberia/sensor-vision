@@ -1,7 +1,7 @@
 use serde_with::{serde_as, DisplayFromStr};
 use serde::{Deserialize, Serialize};
 
-use uuid::Uuid;
+use crate::model::MetricId;
 use crate::model::sensor::Metric;
 
 // TODO Incorporate into MqttRequest and MqtResponse types
@@ -47,8 +47,7 @@ pub struct CreateMetricResponsePayload {
     pub matching_id: usize,
 
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 }
 
 #[serde_as]
@@ -63,27 +62,25 @@ pub struct CreateMetricPayload {
 }
 
 #[derive(Debug, Serialize)]
-pub struct UpdateMetricRequest<'a> {
+pub struct UpdateMetricRequest {
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<&'a str>,
+    pub name: Option<String>,
 
     #[serde(rename = "valueAnnotation")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value_annotation: Option<&'a str>,
+    pub value_annotation: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DeleteMetricRequest {
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MetricValue {
     Integer(i64),
@@ -95,8 +92,7 @@ pub enum MetricValue {
 #[derive(Debug, Serialize)]
 pub struct PushMetricValueRequest {
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 
     pub value: MetricValue,
 
@@ -107,8 +103,7 @@ pub struct PushMetricValueRequest {
 #[derive(Debug, Deserialize)]
 pub struct PushMetricValueResponse {
     #[serde(rename = "metricId")]
-    #[serde(with = "uuid::serde::simple")]
-    pub metric_id: Uuid,
+    pub metric_id: MetricId,
 
     pub value: MetricValue,
 }
