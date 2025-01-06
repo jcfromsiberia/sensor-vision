@@ -1,28 +1,76 @@
-use eyre::Result;
-use futures::executor::block_on;
-use ratatui::Frame;
+use actix::{AsyncContext, Handler, Message, WrapFuture};
 
-use crate::app::dialog::{
-    DialogButton, DialogCommand, InputDialogState, MessageDialogState, ModalDialog,
-};
-use crate::app::ui_state::{MetricLivedataWindow, UIState};
-use crate::client::state::Sensors;
-use crate::model::sensor::{Metric, Sensor, ValueType, ValueUnit};
-use crate::model::SensorId;
 use ratatui::layout::Constraint::Ratio;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::symbols;
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Borders, Chart, Clear, Dataset, GraphType, List, ListItem, Paragraph,
-    Tabs, Wrap,
+    Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph,
+    Tabs,
 };
-use tokio::io::split;
-use tokio::sync::oneshot;
+use ratatui::Frame;
 
-pub fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) -> Result<()> {
+use crate::client::state::Sensors;
+use crate::model::sensor::{Metric, Sensor, ValueType, ValueUnit};
+use crate::model::SensorId;
+use crate::tui_app::dialog::*;
+use crate::tui_app::dialog::render::Renderable;
+use crate::tui_app::ui_state::{MetricLivedataWindow, UIState};
+
+use crate::tui_app::tui::SharedTui;
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Render {
+    pub tui: SharedTui,
+    pub sensors: Sensors,
+}
+
+impl Handler<Render> for UIState {
+    type Result = ();
+
+    fn handle(&mut self, Render { tui, sensors }: Render, ctx: &mut Self::Context) -> Self::Result {
+        let ui_state = self.clone();
+
+        ctx.spawn(
+            async move {
+                let dialog_to_render: Option<Box<dyn Renderable>> = match &ui_state.modal_dialog {
+                    Some(ModalDialog::Confirmation(dialog)) => {
+                        if let Ok(dialog_state) =
+                            dialog.send(StateSnapshot::<ConfirmationDialogState>::default()).await
+                        {
+                            Some(Box::new(dialog_state))
+                        } else {
+                            None
+                        }
+                    },
+                    Some(ModalDialog::Input(dialog)) => {
+                        if let Ok(dialog_state) =
+                            dialog.send(StateSnapshot::<InputDialogState>::default()).await
+                        {
+                            Some(Box::new(dialog_state))
+                        } else {
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
+                let _ = tui.lock().await.terminal.draw(move |frame| {
+                    render_state(frame, &sensors, &ui_state);
+                    if let Some(dialog) = dialog_to_render {
+                        dialog.render(frame);
+                    }
+                });
+            }
+            .into_actor(self),
+        );
+    }
+}
+
+fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) {
     let app_area = frame.area();
 
     // TODO Fetch name and version from Cargo.toml
@@ -31,7 +79,7 @@ pub fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) ->
         " <Sensor Action> ".into(),
         "<Key>".light_blue().bold(),
         " <Metric Action> ".into(),
-        "<Shift+Key>".light_blue().bold(),
+        "<Shift+Key> ".light_blue().bold(),
         "|".into(),
         " Next ".into(),
         "<Tab>".blue().bold(),
@@ -54,8 +102,13 @@ pub fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) ->
         .border_set(border::THICK);
 
     if sensors.is_empty() {
-        // TODO render empty state
-        return Ok(());
+        let no_sensors = Paragraph::new(
+            Line::from("Current connector has no sensors"))
+            .red()
+            .centered()
+            .block(app_pad);
+        frame.render_widget(no_sensors, app_area);
+        return;
     }
 
     let sensor_tabs = Tabs::new(
@@ -73,40 +126,11 @@ pub fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) ->
 
     if let Some((current_sensor, _)) = ui_state.current_sensor {
         let (_, current_sensor) = sensors.iter().nth(current_sensor).unwrap();
-        render_sensor(frame, current_sensor, ui_state)?;
+        render_sensor(frame, current_sensor, ui_state);
     }
-
-    render_dialog(frame, ui_state, app_area)?;
-
-    Ok(())
 }
 
-fn render_dialog(frame: &mut Frame, ui_state: &UIState, area: Rect) -> Result<()> {
-    let Some(modal_dialog) = &ui_state.modal_dialog else {
-        return Ok(());
-    };
-
-    use ModalDialog::*;
-
-    match modal_dialog {
-        Input(handle) => {
-            let (tx, rx) = oneshot::channel::<InputDialogState>();
-            handle.send_command(DialogCommand::Snapshot { respond_to: tx });
-            let dialog_state = block_on(async move { rx.await })?;
-            dialog_state.render(frame, area);
-        }
-        Confirmation(handle) => {
-            let (tx, rx) = oneshot::channel::<MessageDialogState>();
-            handle.send_command(DialogCommand::Snapshot { respond_to: tx });
-            let dialog_state = block_on(async move { rx.await })?;
-            dialog_state.render(frame, area);
-        }
-    }
-
-    Ok(())
-}
-
-fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState) -> Result<()> {
+fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState) {
     let sensor_area = {
         let vbox = Layout::default()
             .direction(Direction::Vertical)
@@ -159,7 +183,7 @@ fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState)
 
     if metrics_count == 0 {
         // TODO Render Empty State
-        return Ok(());
+        return;
     }
 
     // layout! cannot do that :(
@@ -170,10 +194,8 @@ fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState)
         .split(vbox_layout[1]);
     for i in 0..metrics_count {
         let metric = &sensor.metrics[i];
-        render_metric(frame, metrics_areas[i], ui_state, metric, sensor.sensor_id)?;
+        render_metric(frame, metrics_areas[i], ui_state, metric, sensor.sensor_id);
     }
-
-    Ok(())
 }
 
 fn render_metric(
@@ -182,7 +204,7 @@ fn render_metric(
     ui_state: &UIState,
     metric: &Metric,
     sensor_id: SensorId,
-) -> Result<()> {
+) {
     let mut list_items = Vec::<ListItem>::new();
     let id: String;
     let name: String;
@@ -286,8 +308,6 @@ fn render_metric(
         let no_data = Line::from("NO DATA").magenta().bold().centered();
         frame.render_widget(no_data, vbox_layout[1]);
     }
-
-    Ok(())
 }
 
 fn numeric_livedata_chart<'a>(
@@ -339,168 +359,6 @@ fn numeric_livedata_chart<'a>(
         .block(chart_block)
         .x_axis(x_axis)
         .y_axis(y_axis)
-}
-
-impl MessageDialogState {
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        let area = centered_rect(30, 20, area);
-
-        let instructions = Line::from(vec![
-            " Select Button ".into(),
-            "<Tab>".blue().bold(),
-            " Press ".into(),
-            "<Enter>".blue().bold(),
-            " Close ".into(),
-            "<Esc> ".blue().bold(),
-        ]);
-        let pad = Block::bordered()
-            .title(Line::from(self.title.as_str()).centered())
-            .title_bottom(instructions.centered())
-            .bg(Color::Indexed(172));
-
-        let content_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                // Header
-                Constraint::Length(1),
-                // Text area
-                Constraint::Fill(1),
-                // Buttons area { [   OK   ]_[  CANCEL  ] }
-                Constraint::Length(1),
-                // Footer
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-        let buttons_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                // { [   OK   ]_[  CANCEL  ] }
-                Constraint::Min(1),
-                Constraint::Length(10),
-                Constraint::Length(1),
-                Constraint::Length(10),
-                Constraint::Min(1),
-            ])
-            .split(content_layout[2]);
-
-        let text = Paragraph::new(self.text.as_str())
-            .centered()
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(Clear, area);
-        frame.render_widget(pad, area);
-        frame.render_widget(text, content_layout[1]);
-
-        DialogButton::Ok.render(frame, buttons_layout[1], self.focused_button);
-        DialogButton::Cancel.render(frame, buttons_layout[3], self.focused_button);
-    }
-}
-
-impl InputDialogState {
-    fn render(&self, frame: &mut Frame, area: Rect) {
-        let area = centered_rect(30, 20, area);
-
-        let instructions = Line::from(vec![
-            " Select Button ".into(),
-            "<Tab>".blue().bold(),
-            " Press ".into(),
-            "<Enter>".blue().bold(),
-            " Close ".into(),
-            "<Esc> ".blue().bold(),
-        ]);
-
-        let pad = Block::bordered()
-            .title(Line::from(self.title.clone()).centered())
-            .title_bottom(instructions.centered())
-            .bg(Color::Indexed(172));
-
-        let content_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                // 0 Header
-                Constraint::Length(1),
-                // 1 Text area
-                Constraint::Fill(1),
-                // 2 Text input { Label [<input>          ] }
-                Constraint::Length(1),
-                // 3 Buttons area { [   OK   ]_[  CANCEL  ] }
-                Constraint::Length(1),
-                // 4 Footer
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-        let input_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                // { Label [<input>          ] }
-                Constraint::Length(1),
-                Constraint::Length(10),
-                Constraint::Percentage(80),
-                Constraint::Min(1),
-            ])
-            .split(content_layout[2]);
-
-        let buttons_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                // { [   OK   ]_[  CANCEL  ] }
-                Constraint::Min(1),
-                Constraint::Length(10),
-                Constraint::Length(1),
-                Constraint::Length(10),
-                Constraint::Min(1),
-            ])
-            .split(content_layout[3]);
-
-        let text = Paragraph::new(self.text.as_str())
-            .centered()
-            .wrap(Wrap { trim: false });
-
-        let label = Line::from(self.label.as_str());
-        let text_input_pad = Block::new().bg(Color::Indexed(75));
-        let text_input = Line::from(
-            self.text_input
-                .as_ref()
-                .map(|s| s.as_str())
-                .unwrap_or_else(|| "<input>"),
-        );
-
-        frame.render_widget(Clear, area);
-        frame.render_widget(pad, area);
-        frame.render_widget(text, content_layout[1]);
-        frame.render_widget(label, input_layout[1]);
-        frame.render_widget(text_input_pad, input_layout[2]);
-        frame.render_widget(text_input, input_layout[2]);
-
-        DialogButton::Ok.render(frame, buttons_layout[1], self.focused_button);
-        DialogButton::Cancel.render(frame, buttons_layout[3], self.focused_button);
-    }
-}
-
-impl DialogButton {
-    fn render(&self, frame: &mut Frame, area: Rect, focused: Option<DialogButton>) {
-        let text = match self {
-            Self::Ok => "OK",
-            Self::Cancel => "CANCEL",
-        };
-
-        let mut button_block = Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT)
-            .border_type(BorderType::Rounded)
-            .style(Style::new().bg(Color::Gray));
-
-        if let Some(focused) = focused {
-            if focused == *self {
-                button_block = button_block.style(Style::new().bg(Color::LightBlue));
-            }
-        }
-
-        let button = Paragraph::new(text).block(button_block);
-
-        frame.render_widget(button, area);
-    }
 }
 
 trait Emojified {
@@ -557,7 +415,7 @@ impl Emojified for ValueType {
     }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

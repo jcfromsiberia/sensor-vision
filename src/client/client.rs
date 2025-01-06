@@ -1,267 +1,161 @@
-use std::fmt::Debug;
-use std::time::SystemTime;
-use eyre::{eyre, Result, WrapErr};
+use actix::{
+    Actor, Addr, AsyncContext, Context, Handler, Message, MessageResult, ResponseFuture, WrapFuture,
+};
 
-use serde::de::Deserialize;
-use serde::ser::Serialize;
+use eyre::Result;
 
-use tokio::sync::broadcast;
-use tokio::sync::oneshot;
+use futures::FutureExt;
 
-use crate::client::mqtt::{MqttActorHandle, MqttMessage};
-use crate::client::state::{MqttScheme, SensorStateEvent, SensorStateQuery, SensorStateQueryProto, SensorStateActorHandle, Sensors};
-use crate::model::{ConnectorId, MetricId, SensorId};
-use crate::model::protocol::{CreateMetricPayload, CreateSensorRequest, DeleteMetricRequest, MetricValue, MetricsArrayRequest, PingRequest, PingResponse, PushMetricValueRequest, UpdateMetricRequest, UpdateSensorRequest};
-use crate::model::sensor::Metric;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+use crate::client::mqtt::{
+    MqttActor, MqttListenerService, MqttMessage, MqttRequest, OneWayMessage, SubscribeToListener,
+};
+use crate::client::state::queries::{
+    GetMetricIdByName, GetMetricIds, GetSensorIdByName, GetStateSnapshot,
+};
+use crate::client::state::{
+    queries, MqttScheme, SensorStateEvent, SensorsStateActor, SubscribeToStateEvents,
+};
+use crate::model::{ConnectorId};
+
+#[derive(Clone)]
 pub struct SensorVisionClient {
-    connector_id: ConnectorId,
+    pub(crate) connector_id: ConnectorId,
 
-    mqtt_actor: MqttActorHandle,
-    state_actor: SensorStateActorHandle,
-
-    event_repeater: broadcast::Sender<SensorStateEvent>,
+    pub(crate) mqtt_actor: Addr<MqttActor>,
+    pub(crate) state_actor: Addr<SensorsStateActor>,
+    mqtt_listener_service: Addr<MqttListenerService>,
 }
 
 impl SensorVisionClient {
-    pub fn new(connector_id: ConnectorId) -> Result<Self> {
-        let mqtt_actor = MqttActorHandle::new()?;
+    pub async fn new(connector_id: ConnectorId) -> Result<Self> {
+        let events_topic = format!("/v1.0/{}/#", connector_id);
+        let mqtt_actor = MqttActor::connect_and_start().await?;
+        let mqtt_listener_service = MqttListenerService::connect_and_start(events_topic).await?;
+        let state_actor = SensorsStateActor::new().start();
 
-        let (event_sender, event_receiver) = broadcast::channel::<SensorStateEvent>(100);
-        let event_repeater = event_sender.clone();
-        let state_actor = SensorStateActorHandle::new(connector_id, event_sender)?;
-        let instance = Self {
+        mqtt_listener_service
+            .send(SubscribeToListener(state_actor.downgrade().recipient()))
+            .await?;
+
+        Ok(Self {
             connector_id,
             mqtt_actor,
             state_actor,
-            event_repeater,
-        };
-
-        tokio::task::Builder::new()
-            .name("sensors state event loop")
-            .spawn(state_event_loop(instance.clone(), event_receiver))?;
-
-        Ok(instance)
+            mqtt_listener_service,
+        })
     }
 
-    pub fn state_event_receiver(&self) -> broadcast::Receiver<SensorStateEvent> {
-        self.event_repeater.subscribe()
-    }
-
-    pub async fn state_query<T: Debug>(
-        &self,
-        query: SensorStateQuery,
-        receiver: oneshot::Receiver<T>
-    ) -> T {
-        self.state_actor.state_query(query);
-        receiver.await.expect("Receiving failed")
-    }
-
-    pub async fn sensor_id_by_name(&self, sensor_name: &str) -> Option<SensorId> {
-        let (tx, rx) = oneshot::channel();
-        let query = SensorStateQuery::GetSensorIdByName(SensorStateQueryProto{
-            request: sensor_name.to_owned(),
-            respond_to: tx,
-        });
-        self.state_query(query, rx).await
-    }
-
-    pub async fn metric_id_by_name(&self, sensor_id: SensorId, metric_name: &str) -> Option<MetricId> {
-        let (tx, rx) = oneshot::channel();
-        let query = SensorStateQuery::GetMetricIdByName(SensorStateQueryProto{
-            request: (sensor_id, metric_name.to_owned()),
-            respond_to: tx,
-        });
-        self.state_query(query, rx).await
-    }
-
-    pub async fn ping_test(&self) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#42-connection-check
-        let request = PingRequest {
-            request: String::from("Ping!"),
-        };
-
-        let pong: PingResponse = self.request(MqttScheme::Ping, &request).await?;
-
-        if pong.answer == "Ping!" {
-            Ok(())
-        } else {
-            Err(eyre!("Unexpected response: {:?}", pong))
-        }
-    }
-
-    pub fn create_sensor(&self, name: &str) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#531-create
-        let request = CreateSensorRequest {
-            name: String::from(name),
-        };
-        self.message(MqttScheme::SensorCreate, &request)
-    }
-
-    pub fn update_sensor(
-        &self,
-        sensor_id: SensorId,
-        name: &str,
-        state: Option<bool>
-    ) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#533-update
-        let request = UpdateSensorRequest {
-            name: String::from(name),
-            state: state.map(|x| x as u8),
-        };
-        self.message(MqttScheme::SensorUpdate(sensor_id), &request)
-    }
-
-    pub fn delete_sensor(&self, sensor_id: SensorId) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#534-delete
-        self.raw_message(MqttScheme::SensorDelete(sensor_id), None)
-    }
-
-    pub async fn get_sensors(&self) -> Sensors {
-        let (tx, rx) = oneshot::channel();
-        let query = SensorStateQuery::GetStateSnapshot(SensorStateQueryProto{
-            request: (),
-            respond_to: tx,
-        });
-        self.state_query(query, rx).await
-    }
-
-    pub async fn dump_sensors(&self) -> Result<String> {
-        let sensors = self.get_sensors().await;
-        serde_json::to_string_pretty(&sensors).wrap_err("Failed to dump sensors")
-    }
-
-    pub fn load_sensors(&self) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#532-list
-        self.raw_message(MqttScheme::SensorList, None)
-    }
-
-    pub fn create_metrics(&self, sensor_id: SensorId, metrics: &Vec<Metric>) -> Result<()> {
-        let request = MetricsArrayRequest::many(
-            metrics
-                .iter()
-                .enumerate()
-                .map(|(i, metric)| CreateMetricPayload {
-                    metric: metric.clone(),
-                    matching_id: i + 1,
-                })
-                .collect(),
-        );
-
-        self.message(MqttScheme::MetricCreate(sensor_id), &request)
-    }
-
-    pub fn update_metric(
-        &self,
-        sensor_id: SensorId,
-        metric_id: MetricId,
-        name: Option<String>,
-        value_annotation: Option<String>,
-    ) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#533-update
-        let request = MetricsArrayRequest::one(UpdateMetricRequest {
-            metric_id: metric_id.clone(),
-            name,
-            value_annotation,
-        });
-        self.message(MqttScheme::MetricUpdate(sensor_id), &request)
-    }
-
-    pub fn delete_metric(
-        &self,
-        sensor_id: SensorId,
-        metric_id: MetricId,
-    ) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#543-update
-        let request = MetricsArrayRequest::one(DeleteMetricRequest {
-            metric_id: metric_id.clone(),
-        });
-        self.message(MqttScheme::SensorDelete(sensor_id), &request)
-    }
-
-    pub fn push_value(
-        &self,
-        sensor_id: SensorId,
-        metric_id: MetricId,
-        value: MetricValue,
-        timestamp: Option<SystemTime>,
-    ) -> Result<()> {
-        // According to https://docs-iot.teamviewer.com/mqtt-api/#51-push-metric-values
-        let timestamp = timestamp.map(|ts| {
-            ts.duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        });
-
-        let request = MetricsArrayRequest::one(PushMetricValueRequest {
-            metric_id,
-            value,
-            timestamp,
-        });
-
-        self.message(MqttScheme::PushValues(sensor_id), &request)
-    }
-
-    fn raw_message(&self, scheme: MqttScheme, payload: Option<String>) -> Result<()> {
+    pub(crate) fn raw_message_inner(
+        mqtt_actor: &Addr<MqttActor>,
+        connector_id: &ConnectorId,
+        scheme: MqttScheme,
+        payload: Option<String>,
+    ) {
         let (topic, _, _) = scheme.get_topics();
-        let full_topic = format!("/v1.0/{}/{}", self.connector_id, topic);
+        let full_topic = format!("/v1.0/{}/{}", connector_id, topic);
 
         let message = payload.unwrap_or(String::from("{}"));
 
-        self.mqtt_actor
-            .one_way_message(MqttMessage {
-                topic: full_topic,
-                message,
-            })
+        mqtt_actor.do_send(OneWayMessage(MqttMessage {
+            topic: full_topic,
+            message,
+        }));
     }
 
-    fn message<Blueprint: Serialize>(
+    pub(crate) fn raw_message(&self, scheme: MqttScheme, payload: Option<String>) {
+        Self::raw_message_inner(&self.mqtt_actor, &self.connector_id, scheme, payload);
+    }
+
+    pub(crate) fn message<Blueprint: Serialize>(
         &self,
         scheme: MqttScheme,
         body: &Blueprint,
     ) -> Result<()> {
         let body_serialized = serde_json::to_string(body)?;
-        self.raw_message(scheme, Some(body_serialized))
+        self.raw_message(scheme, Some(body_serialized));
+        Ok(())
     }
 
-    async fn raw_request(&self, scheme: MqttScheme, message: Option<String>) -> Result<String> {
+    pub(crate) async fn raw_request_inner(
+        mqtt_actor: &Addr<MqttActor>,
+        connector_id: &ConnectorId,
+        scheme: MqttScheme,
+        message: Option<String>,
+    ) -> Result<String> {
         let (topic, response_topic, error_topic) = scheme.get_topics();
 
-        let full_topic = format!("/v1.0/{}/{}", self.connector_id, topic);
-        let full_response_topic = format!("/v1.0/{}/{}", self.connector_id, response_topic);
-        let full_error_topic = format!("/v1.0/{}/{}", self.connector_id, error_topic);
+        let full_topic = format!("/v1.0/{}/{}", connector_id, topic);
+        let full_response_topic = format!("/v1.0/{}/{}", connector_id, response_topic);
+        let full_error_topic = format!("/v1.0/{}/{}", connector_id, error_topic);
 
         let message = message.unwrap_or(String::from("{}"));
 
-        self.mqtt_actor
-            .request(
-                MqttMessage {
+        Ok(mqtt_actor
+            .send(MqttRequest {
+                message: MqttMessage {
                     topic: full_topic,
                     message,
                 },
-                full_response_topic,
-                full_error_topic,
-            )
-            .await
+                response_topic: full_response_topic,
+                error_topic: full_error_topic,
+            })
+            .await??)
     }
 
-    async fn request<Request: Serialize, Response: for<'a> Deserialize<'a>>(
+    pub(crate) async fn raw_request(
         &self,
+        scheme: MqttScheme,
+        message: Option<String>,
+    ) -> Result<String> {
+        Self::raw_request_inner(&self.mqtt_actor, &self.connector_id, scheme, message).await
+    }
+
+    pub(crate) async fn request_inner<Request: Serialize, Response: for<'a> Deserialize<'a>>(
+        mqtt_actor: &Addr<MqttActor>,
+        connector_id: &ConnectorId,
         scheme: MqttScheme,
         request: &Request,
     ) -> Result<Response> {
         let request_serialized = serde_json::to_string(request)?;
-        let response_serialized = self.raw_request(scheme, Some(request_serialized)).await?;
+        let response_serialized =
+            Self::raw_request_inner(mqtt_actor, connector_id, scheme, Some(request_serialized))
+                .await?;
         Ok(serde_json::from_str(&response_serialized)?)
     }
 
-    async fn state_event_handler(&mut self, event: SensorStateEvent) {
-        use crate::client::state::SensorStateEvent::*;
+    pub(crate) async fn request<Request: Serialize, Response: for<'a> Deserialize<'a>>(
+        &self,
+        scheme: MqttScheme,
+        request: &Request,
+    ) -> Result<Response> {
+        Self::request_inner(&self.mqtt_actor, &self.connector_id, scheme, request).await
+    }
+}
 
+impl Actor for SensorVisionClient {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        let state_actor = self.state_actor.clone();
+        let weak_this = ctx.address().downgrade().recipient();
+        ctx.spawn(
+            async move {
+                let _ = state_actor.send(SubscribeToStateEvents(weak_this)).await;
+            }
+            .into_actor(self),
+        );
+    }
+}
+
+impl Handler<SensorStateEvent> for SensorVisionClient {
+    type Result = ();
+
+    fn handle(&mut self, event: SensorStateEvent, ctx: &mut Self::Context) -> Self::Result {
+        use SensorStateEvent::*;
         match &event {
             NewLinkedSensorLoaded(linked_sensor) | ExistingLinkedSensorLoaded(linked_sensor) => {
-                // TODO Fire UI Event
                 for linked_metric in &linked_sensor.metrics {
                     self.raw_message(
                         MqttScheme::MetricDescribe(
@@ -269,49 +163,75 @@ impl SensorVisionClient {
                             linked_metric.metric_id,
                         ),
                         None,
-                    )
-                    .expect("Failed to send message");
+                    );
                 }
             }
 
             NewMetricCreated {
                 sensor_id,
                 metric_id,
-            } => {
-                self.raw_message(MqttScheme::MetricDescribe(*sensor_id, *metric_id), None)
-                    .expect("Failed to send message");
-            }
+            } => self.raw_message(MqttScheme::MetricDescribe(*sensor_id, *metric_id), None),
 
             SensorUpdated { .. } => {
                 // There is no other way to get sensor/metric update details
                 // rather than reloading all the sensors again :(
-                self.load_sensors().expect("Failed to reload sensors");
+                self.raw_message(MqttScheme::SensorList, None)
             }
 
             SensorMetricsUpdated { sensor_id } => {
-                let (tx, rx) = oneshot::channel();
-                let query = SensorStateQuery::GetMetricIds(SensorStateQueryProto{
-                    request: *sensor_id,
-                    respond_to: tx,
-                });
-                let Some(metric_ids) = self.state_query(query, rx).await else {
-                    return;
-                };
-                for metric_id in metric_ids {
-                    self.raw_message(MqttScheme::MetricDescribe(*sensor_id, metric_id), None)
-                        .expect("Failed to send message");
-                }
+                let query = queries::GetMetricIds(*sensor_id);
+                let state_actor = self.state_actor.clone();
+                let mqtt_actor = self.mqtt_actor.clone();
+                let connector_id = self.connector_id.clone();
+                let sensor_id = *sensor_id;
+                ctx.spawn(
+                    async move {
+                        let query_result = state_actor.send(query).await;
+                        if let Err(err) = query_result {
+                            log::error!("Query failed: {}", err);
+                        } else {
+                            if let Some(metric_ids) = query_result.unwrap() {
+                                for metric_id in metric_ids {
+                                    Self::raw_message_inner(
+                                        &mqtt_actor,
+                                        &connector_id,
+                                        MqttScheme::MetricDescribe(sensor_id.clone(), metric_id),
+                                        None,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    .into_actor(self),
+                );
             }
+
             _ => {}
-        };
+        }
     }
 }
 
-async fn state_event_loop(
-    mut client: SensorVisionClient,
-    mut event_receiver: broadcast::Receiver<SensorStateEvent>,
-) {
-    while let Ok(event) = event_receiver.recv().await {
-        client.state_event_handler(event).await;
-    }
+macro_rules! delegate_state_queries {
+    ($actor:ty, { $( $msg:ty ),* $(,)? }) => {
+        $(
+            impl actix::Handler<$msg> for $actor {
+                type Result = actix::ResponseFuture<<$msg as actix::Message>::Result>;
+
+                fn handle(&mut self, msg: $msg, _: &mut Self::Context) -> Self::Result {
+                    let state_actor = self.state_actor.clone();
+                    async move {
+                        state_actor.send(msg).await.expect("Delegating failed")
+                    }.boxed_local()
+                }
+            }
+        )*
+    };
 }
+
+delegate_state_queries!(SensorVisionClient, {
+    SubscribeToStateEvents,
+    GetStateSnapshot,
+    GetMetricIds,
+    GetSensorIdByName,
+    GetMetricIdByName,
+});

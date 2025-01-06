@@ -1,24 +1,33 @@
-use eyre::{OptionExt, Result};
+use actix::Actor;
 
-use std::{io, fs};
+use clap::{arg, command, ArgAction};
+
+use eyre::{OptionExt, Result};
 
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use x509_certificate::X509Certificate;
-
-use sensor_vision::app::{
-    app::AppClient,
-    events::{Event, EventHandler},
-    tui::Tui,
-};
-use sensor_vision::client::client::SensorVisionClient;
+use sensor_vision::client::client::*;
+use sensor_vision::client::mqtt::setup_new_certificate;
 
 use sensor_vision::model::ConnectorId;
 
-// #[tokio::main]
-#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
+use sensor_vision::tui_app::app::{AppClient, RunLoop};
+use sensor_vision::tui_app::tui::Tui;
+
+use std::fs;
+use std::io;
+
+use tokio::sync::oneshot;
+use x509_certificate::X509Certificate;
+
+#[actix::main]
 async fn main() -> Result<()> {
-    console_subscriber::init();
+    let matches = command!()
+        .arg(arg!(-n --new "Quick setup a new connector").action(ArgAction::SetTrue))
+        .get_matches();
+    if matches.get_flag("new") {
+        return setup_new_certificate().await;
+    }
 
     let cert_contents = fs::read("clientCert.crt")?;
 
@@ -27,19 +36,19 @@ async fn main() -> Result<()> {
     let connector_id = cert.subject_common_name().ok_or_eyre("Certificate has no CN")?;
     let connector_id: ConnectorId = connector_id.into();
 
-    let sv_client = SensorVisionClient::new(connector_id)?;
+    let client_actor = SensorVisionClient::new(connector_id).await?.start();
 
-    let events = EventHandler::new();
     let backend = CrosstermBackend::new(io::stdout());
     let terminal = Terminal::new(backend)?;
 
     let mut tui = Tui::new(terminal);
     tui.init()?;
 
-    let mut app = AppClient::new(sv_client)?;
+    let app_actor = AppClient::new(client_actor).start();
 
-    app.run(&mut tui, events).await?;
-    tui.exit()?;
+    let (finished_sender, rx) = oneshot::channel();
 
-    Ok(())
+    app_actor.send(RunLoop{finished_sender, tui}).await?;
+
+    Ok(rx.await??)
 }
