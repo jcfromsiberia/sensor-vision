@@ -1,5 +1,5 @@
 use actix::{
-    Actor, Addr, AsyncContext, Context, Handler, Message, MessageResult, ResponseFuture, WrapFuture,
+    Actor, Addr, AsyncContext, Context, Handler, WrapFuture,
 };
 
 use eyre::Result;
@@ -25,6 +25,8 @@ pub struct SensorVisionClient {
 
     pub(crate) mqtt_actor: Addr<MqttActor>,
     pub(crate) state_actor: Addr<SensorsStateActor>,
+
+    #[allow(dead_code)]
     mqtt_listener_service: Addr<MqttListenerService>,
 }
 
@@ -104,6 +106,7 @@ impl SensorVisionClient {
             .await??)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn raw_request(
         &self,
         scheme: MqttScheme,
@@ -125,6 +128,7 @@ impl SensorVisionClient {
         Ok(serde_json::from_str(&response_serialized)?)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn request<Request: Serialize, Response: for<'a> Deserialize<'a>>(
         &self,
         scheme: MqttScheme,

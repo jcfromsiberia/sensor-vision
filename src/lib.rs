@@ -28,12 +28,14 @@ pub mod tui_app {
         pub use confirmation::*;
         pub use generic::*;
         pub use input::*;
+        pub use metric::*;
 
         pub mod render;
 
         mod confirmation;
         mod generic;
         mod input;
+        mod metric;
     }
 
     pub mod ui_state {
@@ -44,8 +46,15 @@ pub mod tui_app {
 
         #[path = "state_queries.rs"]
         pub mod queries;
+
+        mod layout;
     }
 
     pub mod app;
     pub mod tui;
+
+    mod theme;
+    mod utils;
 }
+
+mod utils;

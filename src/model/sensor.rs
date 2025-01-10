@@ -3,10 +3,12 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use serde_valid::Validate;
 
+use strum::EnumIter;
+
 use crate::model::protocol::MetricValue;
 use crate::model::*;
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, EnumIter)]
 pub enum ValueUnit {
     #[serde(rename = "SI.ElectricCurrent.AMPERE")]
     Ampere,
@@ -81,7 +83,7 @@ pub enum ValueUnit {
     Watt,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, EnumIter)]
 pub enum ValueType {
     #[serde(rename = "boolean")]
     Boolean,

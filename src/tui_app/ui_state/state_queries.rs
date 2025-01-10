@@ -177,6 +177,12 @@ impl Handler<HandleKeyEvent> for UIState {
                         let _ = dialog_actor.send(key_event_message).await;
                     }.into_actor(self));
                 },
+                Metric(dialog_actor) => {
+                    let dialog_actor = dialog_actor.clone();
+                    ctx.spawn(async move {
+                        let _ = dialog_actor.send(key_event_message).await;
+                    }.into_actor(self));
+                },
             }
             true
         } else {

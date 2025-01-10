@@ -1,15 +1,21 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use ratatui::Frame;
-use ratatui::prelude::{Color, Line, Stylize};
-use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::prelude::{Line, Stylize};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use ratatui::Frame;
 
-use crate::tui_app::dialog::{DialogActor, KeyEventHandler};
+use strum::IntoEnumIterator;
+
 use crate::tui_app::dialog::generic::{DialogButton, DialogResult};
 use crate::tui_app::dialog::render::*;
+use crate::tui_app::dialog::{DialogActor, KeyEventHandler};
 
-use crate::tui_app::ui_state::render::centered_rect;
+use crate::tui_app::utils::centered_rect_abs;
+use crate::tui_app::theme::*;
+use UIElement::*;
+
+use crate::utils::CircularEnum;
 
 pub type ConfirmationDialogActor = DialogActor<ConfirmationDialogState, ()>;
 
@@ -36,11 +42,10 @@ impl KeyEventHandler<()> for ConfirmationDialogState {
             }
 
             KeyCode::Tab => {
-                if let Some(_button @ DialogButton::Ok) = self.focused_button {
-                    self.focused_button = Some(DialogButton::Cancel);
-                } else {
-                    self.focused_button = Some(DialogButton::Ok);
-                }
+                self.focused_button = Some(
+                    self.focused_button
+                        .map_or(DialogButton::iter().next().unwrap(), |btn| btn.next()),
+                );
                 None
             }
 
@@ -52,34 +57,32 @@ impl KeyEventHandler<()> for ConfirmationDialogState {
 impl Renderable for ConfirmationDialogState {
     fn render(&self, frame: &mut Frame) {
         let area = frame.area();
-        let area = centered_rect(30, 20, area);
+        let area = centered_rect_abs(50, 5, area);
 
         let instructions = Line::from(vec![
-            " Select Button ".into(),
-            "<Tab>".blue().bold(),
-            " Press ".into(),
-            "<Enter>".blue().bold(),
-            " Close ".into(),
-            "<Esc> ".blue().bold(),
+            " Select Button ".themed(DialogInstructionsText),
+            "<Tab>".themed(DialogInstructionsActionText).bold(),
+            " Press ".themed(DialogInstructionsText),
+            "<Enter>".themed(DialogInstructionsActionText).bold(),
+            " Close ".themed(DialogInstructionsText),
+            "<Esc> ".themed(DialogInstructionsActionText).bold(),
         ]);
         let pad = Block::bordered()
             .title(Line::from(self.title.as_str()).centered())
             .title_bottom(instructions.centered())
-            .bg(Color::Indexed(172));
+            .themed(DialogPad);
+
+        let content_area = centered_rect_abs(area.width - 2, area.height - 2, area);
 
         let content_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                // Header
-                Constraint::Length(1),
                 // Text area
                 Constraint::Fill(1),
                 // Buttons area { [   OK   ]_[  CANCEL  ] }
                 Constraint::Length(1),
-                // Footer
-                Constraint::Length(1),
             ])
-            .split(area);
+            .split(content_area);
 
         let buttons_layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -91,7 +94,7 @@ impl Renderable for ConfirmationDialogState {
                 Constraint::Length(10),
                 Constraint::Min(1),
             ])
-            .split(content_layout[2]);
+            .split(content_layout[1]);
 
         let text = Paragraph::new(self.text.as_str())
             .centered()
@@ -99,7 +102,7 @@ impl Renderable for ConfirmationDialogState {
 
         frame.render_widget(Clear, area);
         frame.render_widget(pad, area);
-        frame.render_widget(text, content_layout[1]);
+        frame.render_widget(text, content_layout[0]);
 
         DialogButton::Ok.render(frame, buttons_layout[1], self.focused_button);
         DialogButton::Cancel.render(frame, buttons_layout[3], self.focused_button);

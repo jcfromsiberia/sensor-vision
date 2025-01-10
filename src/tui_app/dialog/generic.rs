@@ -5,12 +5,15 @@ use crossterm::event::KeyEvent;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
+use strum::EnumIter;
+
 use tokio::sync::oneshot;
 
 use crate::tui_app::dialog::{ConfirmationDialogActor, InputDialogActor};
+use crate::tui_app::dialog::metric::MetricDialogActor;
 use crate::tui_app::ui_state::queries::HandleKeyEvent;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, EnumIter)]
 pub enum DialogButton {
     Ok,
     Cancel,
@@ -26,6 +29,7 @@ pub enum DialogResult<T> {
 pub enum ModalDialog {
     Confirmation(Addr<ConfirmationDialogActor>),
     Input(Addr<InputDialogActor>),
+    Metric(Addr<MetricDialogActor>),
 }
 
 /// `S` stands for State

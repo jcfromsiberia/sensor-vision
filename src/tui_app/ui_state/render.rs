@@ -1,25 +1,29 @@
 use actix::{AsyncContext, Handler, Message, WrapFuture};
 
-use ratatui::layout::Constraint::Ratio;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Style, Stylize};
 use ratatui::symbols;
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph,
-    Tabs,
+    Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph, Tabs,
 };
 use ratatui::Frame;
 
 use crate::client::state::Sensors;
-use crate::model::sensor::{Metric, Sensor, ValueType, ValueUnit};
+use crate::model::sensor::{Metric, Sensor, ValueType};
 use crate::model::SensorId;
-use crate::tui_app::dialog::*;
 use crate::tui_app::dialog::render::Renderable;
+use crate::tui_app::dialog::*;
+use crate::tui_app::ui_state::layout::metric_dyn_layout;
 use crate::tui_app::ui_state::{MetricLivedataWindow, UIState};
 
+use crate::tui_app::theme::*;
 use crate::tui_app::tui::SharedTui;
+use crate::tui_app::utils;
+
+use crate::tui_app::theme::Emojified;
+use UIElement::*;
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -38,23 +42,35 @@ impl Handler<Render> for UIState {
             async move {
                 let dialog_to_render: Option<Box<dyn Renderable>> = match &ui_state.modal_dialog {
                     Some(ModalDialog::Confirmation(dialog)) => {
-                        if let Ok(dialog_state) =
-                            dialog.send(StateSnapshot::<ConfirmationDialogState>::default()).await
+                        if let Ok(dialog_state) = dialog
+                            .send(StateSnapshot::<ConfirmationDialogState>::default())
+                            .await
                         {
                             Some(Box::new(dialog_state))
                         } else {
                             None
                         }
-                    },
+                    }
                     Some(ModalDialog::Input(dialog)) => {
-                        if let Ok(dialog_state) =
-                            dialog.send(StateSnapshot::<InputDialogState>::default()).await
+                        if let Ok(dialog_state) = dialog
+                            .send(StateSnapshot::<InputDialogState>::default())
+                            .await
                         {
                             Some(Box::new(dialog_state))
                         } else {
                             None
                         }
-                    },
+                    }
+                    Some(ModalDialog::Metric(dialog)) => {
+                        if let Ok(dialog_state) = dialog
+                            .send(StateSnapshot::<MetricDialogState>::default())
+                            .await
+                        {
+                            Some(Box::new(dialog_state))
+                        } else {
+                            None
+                        }
+                    }
                     None => None,
                 };
 
@@ -76,35 +92,34 @@ fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) {
     // TODO Fetch name and version from Cargo.toml
     let app_title = Line::from(format!("{} v{}", "SensorVision", "0.1.0").bold());
     let instructions = Line::from(vec![
-        " <Sensor Action> ".into(),
-        "<Key>".light_blue().bold(),
-        " <Metric Action> ".into(),
-        "<Shift+Key> ".light_blue().bold(),
-        "|".into(),
-        " Next ".into(),
-        "<Tab>".blue().bold(),
-        " New ".into(),
-        "<n>".green().bold(),
-        " Edit ".into(),
-        "<e>".green().bold(),
-        " Delete ".into(),
-        "<d>".red().bold(),
-        " Push Value ".into(),
-        "<Space> ".green().bold(),
-        "|".into(),
-        " Quit ".into(),
-        "<q> ".yellow().bold(),
+        " <Sensor Action> ".themed(InstructionsText),
+        "<Key>".themed(InstructionsActionText).bold(),
+        " <Metric Action> ".themed(InstructionsText),
+        "<Shift+Key> ".themed(InstructionsActionText).bold(),
+        "|".themed(InstructionsText),
+        " Next ".themed(InstructionsText),
+        "<Tab>".themed(InstructionsActionText).bold(),
+        " New ".themed(InstructionsText),
+        "<n>".themed(InstructionsActionText).bold(),
+        " Edit ".themed(InstructionsText),
+        "<e>".themed(InstructionsActionText).bold(),
+        " Delete ".themed(InstructionsText),
+        "<d>".themed(InstructionsActionText).bold(),
+        " Push Value ".themed(InstructionsText),
+        "<Space> ".themed(InstructionsActionText).bold(),
+        "|".themed(InstructionsText),
+        " Quit ".themed(InstructionsText),
+        "<q> ".themed(InstructionsActionText).bold(),
     ]);
     let app_pad = Block::bordered()
         .title(app_title.centered())
         .title_bottom(instructions.centered())
-        .style(Style::default().fg(Color::Cyan).bg(Color::Black))
+        .style(Style::default().themed(AppPad))
         .border_set(border::THICK);
 
     if sensors.is_empty() {
-        let no_sensors = Paragraph::new(
-            Line::from("Current connector has no sensors"))
-            .red()
+        let no_sensors = Paragraph::new(Line::from("Current connector has no sensors"))
+            .themed(NoSensors)
             .centered()
             .block(app_pad);
         frame.render_widget(no_sensors, app_area);
@@ -118,7 +133,7 @@ fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) {
             .collect::<Vec<_>>(),
     )
     .block(app_pad)
-    .highlight_style(Style::default().yellow())
+    .highlight_style(Style::default().themed(SelectedSensorTab))
     .divider(symbols::DOT)
     .select(ui_state.current_sensor.map(|(i, _)| i));
 
@@ -131,6 +146,8 @@ fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) {
 }
 
 fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState) {
+    let metrics_count = sensor.metrics.len();
+
     let sensor_area = {
         let vbox = Layout::default()
             .direction(Direction::Vertical)
@@ -152,8 +169,16 @@ fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState)
 
     let vbox_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Percentage(40)])
+        .constraints([Constraint::Length(1), Constraint::Min(13)])
         .split(sensor_area);
+
+    if metrics_count == 0 {
+        let no_metrics = Paragraph::new(Line::from("Current sensor has no metrics"))
+            .themed(NoMetrics)
+            .centered();
+        frame.render_widget(no_metrics, vbox_layout[0]);
+        return;
+    }
 
     let title = Paragraph::new(
         Line::from(vec![
@@ -163,38 +188,27 @@ fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState)
                     emojis::get_by_shortcode("signal_strength").unwrap(),
                     sensor.name
                 ),
-                Style::default().fg(Color::LightBlue).bold(),
+                Style::default().themed(SensorName).bold(),
             ),
-            Span::styled(" | ", Style::default().fg(Color::White)),
+            Span::styled(" | ", Style::default().themed(InstructionsText)),
             Span::styled(
                 format!(
                     "{}️ {}",
                     emojis::get_by_shortcode("id").unwrap(),
                     sensor.sensor_id
                 ),
-                Style::default().fg(Color::LightCyan),
+                Style::default().themed(SensorId),
             ),
         ])
         .centered(),
     );
     frame.render_widget(title, vbox_layout[0]);
 
-    let metrics_count = sensor.metrics.len();
-
-    if metrics_count == 0 {
-        // TODO Render Empty State
-        return;
-    }
-
-    // layout! cannot do that :(
-    let metrics_areas = Layout::default()
-        .direction(Direction::Horizontal)
-        // TODO Consider limiting metrics in a row
-        .constraints(vec![Ratio(1, metrics_count as u32); metrics_count])
-        .split(vbox_layout[1]);
-    for i in 0..metrics_count {
-        let metric = &sensor.metrics[i];
-        render_metric(frame, metrics_areas[i], ui_state, metric, sensor.sensor_id);
+    if let Ok(metric_areas) = metric_dyn_layout(metrics_count, vbox_layout[1], 50, 20) {
+        for i in 0..metrics_count {
+            let metric = &sensor.metrics[i];
+            render_metric(frame, metric_areas[i], ui_state, metric, sensor.sensor_id);
+        }
     }
 }
 
@@ -219,7 +233,7 @@ fn render_metric(
             name = metric_name.clone();
             list_items.push(ListItem::new(Line::from(Span::styled(
                 value_unit.emojified(),
-                Style::default().fg(Color::LightGreen),
+                Style::default().themed(MetricValueUnit),
             ))));
         }
 
@@ -233,7 +247,7 @@ fn render_metric(
             name = metric_name.clone();
             list_items.push(ListItem::new(Line::from(Span::styled(
                 value_type.emojified(),
-                Style::default().fg(Color::LightGreen),
+                Style::default().themed(MetricValueType),
             ))));
             list_items.push(ListItem::new(Line::from(Span::styled(
                 format!(
@@ -241,7 +255,7 @@ fn render_metric(
                     emojis::get_by_shortcode("writing_hand").unwrap(),
                     value_annotation
                 ),
-                Style::default().fg(Color::LightBlue),
+                Style::default().themed(MetricValueAnnotation),
             ))));
         }
     }
@@ -250,11 +264,11 @@ fn render_metric(
         0,
         ListItem::new(Line::from(Span::styled(
             format!("{} {:.20}", emojis::get_by_shortcode("id").unwrap(), id),
-            Style::default().fg(Color::LightBlue),
+            Style::default().themed(MetricId),
         ))),
     );
 
-    let content_area = centered_rect(96, 92, area);
+    let content_area = utils::centered_rect_abs(area.width - 2, area.height - 2, area);
     let vbox_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Percentage(100)])
@@ -266,14 +280,15 @@ fn render_metric(
 
     let mut metric_props_block = Block::default()
         .borders(Borders::ALL)
-        .title(Line::from(Span::styled(name, Style::default().fg(Color::LightGreen))).centered())
+        .themed(MetricPropsBlock)
+        .title(Line::from(Span::styled(name, Style::default().themed(MetricName))).centered())
         .border_type(BorderType::Rounded);
     if ui_state
         .current_metric
         .is_some_and(|(_, metric_id)| *metric.metric_id() == metric_id)
     {
         metric_props_block =
-            metric_props_block.border_style(Style::default().fg(Color::LightMagenta));
+            metric_props_block.border_style(Style::default().themed(MetricPropsBlockSelected));
     }
     frame.render_widget(metric_props_block, area);
 
@@ -305,7 +320,7 @@ fn render_metric(
             }
         };
     } else {
-        let no_data = Line::from("NO DATA").magenta().bold().centered();
+        let no_data = Line::from("NO DATA").themed(MetricNoData).bold().centered();
         frame.render_widget(no_data, vbox_layout[1]);
     }
 }
@@ -318,17 +333,17 @@ fn numeric_livedata_chart<'a>(
         Dataset::default()
             .marker(symbols::Marker::Braille)
             .graph_type(GraphType::Line)
-            .style(Style::default().light_green())
+            .themed(LivedataLine)
             .data(&livedata_window.data),
         Dataset::default()
             .marker(symbols::Marker::Dot)
             .graph_type(GraphType::Scatter)
-            .style(Style::default().red())
+            .themed(LivedataScatter)
             .data(&livedata_window.data),
     ];
 
     let x_axis = Axis::default()
-        .style(Style::default().white())
+        .themed(InstructionsText)
         .bounds([livedata_window.min_timestamp, livedata_window.max_timestamp])
         .labels([
             livedata_window.min_timestamp_str.clone(),
@@ -336,8 +351,8 @@ fn numeric_livedata_chart<'a>(
         ]);
 
     let y_axis = Axis::default()
-        .title(annotation.red())
-        .style(Style::default().white())
+        .title(annotation.themed(InstructionsText))
+        .themed(InstructionsText)
         .bounds([livedata_window.min_value, livedata_window.max_value])
         .labels([
             livedata_window.min_value_str.clone(),
@@ -349,7 +364,7 @@ fn numeric_livedata_chart<'a>(
         .title(
             Line::from(Span::styled(
                 "Livedata",
-                Style::default().fg(Color::Red).bg(Color::Black),
+                Style::default().themed(InstructionsText),
             ))
             .centered(),
         )
@@ -359,79 +374,5 @@ fn numeric_livedata_chart<'a>(
         .block(chart_block)
         .x_axis(x_axis)
         .y_axis(y_axis)
-}
-
-trait Emojified {
-    fn emojified(&self) -> String;
-}
-
-impl Emojified for ValueUnit {
-    fn emojified(&self) -> String {
-        let shortcode = match self {
-            ValueUnit::Ampere
-            | ValueUnit::Farad
-            | ValueUnit::Ohm
-            | ValueUnit::Volt
-            | ValueUnit::Watt => "zap",
-            ValueUnit::Bit => "keycap_ten",
-            ValueUnit::Candela => "bulb",
-            ValueUnit::Celsius => "thermometer",
-            ValueUnit::Decibel => "loud_sound",
-            ValueUnit::Hertz => "signal_strength",
-            ValueUnit::Joule => "battery",
-            ValueUnit::Kilogram => "scales",
-            ValueUnit::Latitude | ValueUnit::Longitude => "world_map",
-            ValueUnit::Meter => "straight_ruler",
-            ValueUnit::MetersPerSecond => "bullettrain_side",
-            ValueUnit::MetersPerSquareSecond => "rocket",
-            ValueUnit::Mole => "test_tube",
-            ValueUnit::Newton => "apple",
-            ValueUnit::Pascal => "tornado",
-            ValueUnit::Percent => "100",
-            ValueUnit::Radian | ValueUnit::SquareMetre => "triangular_ruler",
-            ValueUnit::Second => "watch",
-        };
-        format!(
-            "{} {:?}",
-            emojis::get_by_shortcode(shortcode).unwrap(),
-            self
-        )
-    }
-}
-
-impl Emojified for ValueType {
-    fn emojified(&self) -> String {
-        let shortcode = match self {
-            ValueType::Boolean => "keycap_ten",
-            ValueType::Integer => "1234",
-            ValueType::Double => "heavy_division_sign",
-            ValueType::String => "pencil",
-        };
-        format!(
-            "{} {:?}",
-            emojis::get_by_shortcode(shortcode).unwrap(),
-            self
-        )
-    }
-}
-
-pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    // Then cut the middle vertical piece into three width-wise pieces
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1] // Return the middle chunk
+        .themed(LivedataChart)
 }

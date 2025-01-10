@@ -1,7 +1,7 @@
 use actix::{Actor, Addr, AsyncContext, Context, Handler, Message, StreamHandler, WrapFuture};
-use std::sync::Arc;
-
 use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use eyre::Result;
 
@@ -13,19 +13,22 @@ use tokio::sync::Mutex;
 
 use crate::client::client::SensorVisionClient;
 use crate::client::client_queries::{
-    CreateSensor, DeleteMetric, DeleteSensor, LoadSensors, PushValue, UpdateSensor,
+    CreateMetrics, CreateSensor, DeleteMetric, DeleteSensor, LoadSensors, PushValue, UpdateMetric,
+    UpdateSensor,
 };
 use crate::client::state::queries::GetStateSnapshot;
 use crate::client::state::{SensorStateEvent, Sensors, SubscribeToStateEvents};
-use crate::model::sensor::{Metric, ValueType};
+use crate::model::sensor::{Metric, ValueType, ValueUnit};
 use crate::tui_app::dialog::{
     ConfirmationDialogActor, ConfirmationDialogState, DialogButton, DialogResult, InputDialogActor,
-    InputDialogState, ModalDialog,
+    InputDialogState, MetricDialogActor, MetricDialogState, ModalDialog,
 };
 use crate::tui_app::tui::{SharedTui, Tui};
 use crate::tui_app::ui_state::queries::*;
 use crate::tui_app::ui_state::render::Render;
 use crate::tui_app::ui_state::UIState;
+
+use crate::tui_app::theme::THEME_INDEX;
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -82,10 +85,6 @@ impl AppClient {
     async fn render(&self, tui: SharedTui) -> Result<()> {
         let sensors = self.sv_client_actor.send(GetStateSnapshot).await?;
         self.ui_state_actor.send(Render { tui, sensors }).await?;
-
-        // tui.lock().await.terminal.draw(move |frame| {
-        //     let _ = render_state(frame, &sensors, &ui_state);
-        // })?;
         Ok(())
     }
 
@@ -212,15 +211,30 @@ impl AppClient {
                 self.create_sensor().await?;
             }
 
+            Char('N') => {
+                self.create_metric().await?;
+            }
+
             Char('e') => {
                 self.update_sensor().await?;
+            }
+
+            Char('E') => {
+                self.update_metric().await?;
             }
 
             Char(' ') => {
                 self.push_value().await?;
             }
 
-            _ => {}
+            Char('t') => {
+                let theme_idx = THEME_INDEX.load(Ordering::SeqCst);
+                THEME_INDEX.store(if theme_idx != 0 { 0 } else { 1 }, Ordering::SeqCst);
+            }
+
+            _ => {
+                return Ok(());
+            }
         }
 
         self.rerender().await;
@@ -350,10 +364,108 @@ impl AppClient {
     }
 
     async fn create_metric(&self) -> Result<()> {
+        let ui_state = self.ui_state_actor.send(GetUIStateSnapshot).await?;
+        let Some((_, sensor_id)) = ui_state.current_sensor else {
+            return Ok(());
+        };
+
+        let (tx, rx) = oneshot::channel();
+        let dialog_actor = MetricDialogActor::new(
+            MetricDialogState::new(
+                "Create Metric".to_owned(),
+                "Which Metric to create?".to_owned(),
+                vec![
+                    Metric::predefined(String::default(), ValueUnit::Percent),
+                    Metric::custom(String::default(), ValueType::Integer, String::default()),
+                ],
+            )?,
+            tx,
+        )
+        .start();
+
+        let ui_state_actor = self.ui_state_actor.clone();
+        let sv_client_actor = self.sv_client_actor.clone();
+
+        actix::spawn(async move {
+            let dialog_result = rx.await.expect("Receiving failed");
+            let _ = ui_state_actor.send(SetModalDialog(None)).await;
+            if let DialogResult::Accept { result: new_metric } = dialog_result {
+                if let Err(err) = sv_client_actor
+                    .send(CreateMetrics {
+                        sensor_id,
+                        metrics: vec![new_metric],
+                    })
+                    .await
+                {
+                    log::error!("Failed to send CreateMetrics: {err}");
+                }
+            }
+        });
+
+        let message = SetModalDialog(Some(ModalDialog::Metric(dialog_actor.clone())));
+        self.ui_state_actor.send(message).await?;
+
         Ok(())
     }
 
     async fn update_metric(&self) -> Result<()> {
+        let (sensors, ui_state) = self.current_state().await?;
+        let (Some((_, sensor_id)), Some((_, metric_id))) =
+            (ui_state.current_sensor, ui_state.current_metric)
+        else {
+            return Ok(());
+        };
+
+        let current_metric = sensors
+            .get(&sensor_id)
+            .unwrap()
+            .metrics
+            .iter()
+            .find(|metric| metric.metric_id() == &metric_id)
+            .unwrap();
+
+        let (tx, rx) = oneshot::channel();
+        let dialog_actor = MetricDialogActor::new(
+            MetricDialogState::new(
+                "Update Metric".to_owned(),
+                "Change current metric".to_owned(),
+                vec![current_metric.clone()],
+            )?,
+            tx,
+        )
+        .start();
+
+        let ui_state_actor = self.ui_state_actor.clone();
+        let sv_client_actor = self.sv_client_actor.clone();
+
+        actix::spawn(async move {
+            let dialog_result = rx.await.expect("Receiving failed");
+            let _ = ui_state_actor.send(SetModalDialog(None)).await;
+            if let DialogResult::Accept { result: metric } = dialog_result {
+                if let Err(err) = sv_client_actor
+                    .send(UpdateMetric {
+                        sensor_id,
+                        metric_id,
+                        name: Some(metric.name().to_owned()),
+                        value_annotation: {
+                            match metric {
+                                Metric::Custom {
+                                    value_annotation, ..
+                                } => Some(value_annotation),
+                                _ => None,
+                            }
+                        },
+                    })
+                    .await
+                {
+                    log::error!("Failed to send MetricUpdate: {err}");
+                }
+            }
+        });
+
+        let message = SetModalDialog(Some(ModalDialog::Metric(dialog_actor.clone())));
+        self.ui_state_actor.send(message).await?;
+
         Ok(())
     }
 
@@ -429,7 +541,7 @@ impl AppClient {
         let dialog_actor = InputDialogActor::new(
             InputDialogState {
                 title: "Push Value to Metric".to_owned(),
-                text: format!("value to Metric {metric_name}?"),
+                text: format!("Push value to Metric {metric_name}?"),
                 label: "Value:".to_owned(),
                 text_input: default_value,
                 focused_button: Some(DialogButton::Ok),

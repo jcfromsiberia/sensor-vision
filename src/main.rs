@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         .arg(arg!(-n --new "Quick setup a new connector").action(ArgAction::SetTrue))
         .get_matches();
     if matches.get_flag("new") {
-        return setup_new_certificate().await;
+        setup_new_certificate().await?;
     }
 
     let cert_contents = fs::read("clientCert.crt")?;
