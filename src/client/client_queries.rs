@@ -232,7 +232,7 @@ impl Handler<DeleteMetric> for SensorVisionClient {
         let request = MetricsArrayRequest::one(DeleteMetricRequest {
             metric_id: metric_id.clone(),
         });
-        self.message(MqttScheme::SensorDelete(sensor_id), &request)
+        self.message(MqttScheme::MetricDelete(sensor_id), &request)
     }
 }
 
