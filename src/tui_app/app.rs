@@ -346,6 +346,7 @@ impl AppClient {
 
         let ui_state_actor = self.ui_state_actor.clone();
         let sv_client_actor = self.sv_client_actor.clone();
+        let app = self.clone();
 
         actix::spawn(async move {
             let dialog_result = rx.await.expect("Receiving failed");
@@ -354,6 +355,7 @@ impl AppClient {
                 if let Err(err) = sv_client_actor.send(DeleteSensor { sensor_id }).await {
                     log::error!("Failed to send SensorDelete for {sensor_id}: {err}");
                 }
+                let _ = app.next_sensor().await;
             }
         });
 
@@ -490,6 +492,7 @@ impl AppClient {
 
         let ui_state_actor = self.ui_state_actor.clone();
         let sv_client_actor = self.sv_client_actor.clone();
+        let app = self.clone();
 
         actix::spawn(async move {
             let dialog_result = rx.await.expect("Receiving failed");
@@ -504,6 +507,7 @@ impl AppClient {
                 {
                     log::error!("Failed to send MetricDelete for {sensor_id}/{metric_id}: {err}");
                 }
+                let _ = app.next_metric().await;
             }
         });
 
@@ -655,6 +659,31 @@ impl Handler<SensorStateEvent> for AppClient {
         let app = self.clone();
 
         match event {
+            NewLinkedSensorLoaded(..)
+            | ExistingLinkedSensorLoaded(..)
+            | NewMetricLoaded { .. }
+            | NewSensorCreated(..)
+            | NewMetricCreated { .. } => {
+                let app = self.clone();
+                ctx.spawn(
+                    async move {
+                        let ui_state = app.ui_state_actor.send(GetUIStateSnapshot).await;
+                        if let Err(err) = ui_state {
+                            log::error!("Failed to load UI State: {err}");
+                            return;
+                        }
+                        let ui_state = ui_state.unwrap();
+                        if ui_state.current_sensor.is_none() {
+                            let _ = app.next_sensor().await;
+                        }
+                        if ui_state.current_metric.is_none() {
+                            let _ = app.next_metric().await;
+                        }
+                    }
+                    .into_actor(self),
+                );
+            }
+
             Livedata {
                 sensor_id,
                 metric_id,

@@ -19,7 +19,7 @@ pub fn metric_dyn_layout(
             grid_template_columns: vec![fr(1.0); num_columns],
             gap: Size {
                 width: length(1.0),
-                height: length(0.0),
+                height: length(1.0),
             },
             ..Default::default()
         },

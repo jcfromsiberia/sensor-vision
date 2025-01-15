@@ -70,6 +70,10 @@ impl MetricLivedataWindow {
             .map(|(_, val)| *val)
             .reduce(f64::min)
             .unwrap();
+        if self.min_value > 0.0 {
+            // Nullify the min value to make it look more natural on the chart.
+            self.min_value = 0.0;
+        }
         self.max_value = self
             .data
             .iter()
