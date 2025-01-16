@@ -344,7 +344,7 @@ impl Renderable for MetricDialogState {
 
         let instructions = Line::from(vec![
             " Select Card ".themed(DialogInstructionsText),
-            "↹".themed(DialogInstructionsActionText).bold(),
+            "↹ ".themed(DialogInstructionsActionText).bold(),
             " Change Field ".themed(DialogInstructionsText),
             "↑/↓".themed(DialogInstructionsActionText).bold(),
             " Change Value ".themed(DialogInstructionsText),

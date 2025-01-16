@@ -61,9 +61,9 @@ impl Renderable for ConfirmationDialogState {
 
         let instructions = Line::from(vec![
             " Select Button ".themed(DialogInstructionsText),
-            "<Tab>".themed(DialogInstructionsActionText).bold(),
+            "↹ ".themed(DialogInstructionsActionText).bold(),
             " Press ".themed(DialogInstructionsText),
-            "<Enter>".themed(DialogInstructionsActionText).bold(),
+            "↵".themed(DialogInstructionsActionText).bold(),
             " Close ".themed(DialogInstructionsText),
             "<Esc> ".themed(DialogInstructionsActionText).bold(),
         ]);

@@ -14,7 +14,7 @@ pub static THEME_INDEX: AtomicUsize = AtomicUsize::new(0);
 pub enum UIElement {
     /// Color indices according to https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
     /// `"dark_color, light_color"`
-    #[strum(props(bg_colors = "233,252", fg_colors = "14,0"))]
+    #[strum(props(bg_colors = "232,255", fg_colors = "14,0"))]
     AppPad,
 
     #[strum(props(fg_colors = "14,0"))]

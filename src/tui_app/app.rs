@@ -346,7 +346,6 @@ impl AppClient {
 
         let ui_state_actor = self.ui_state_actor.clone();
         let sv_client_actor = self.sv_client_actor.clone();
-        let app = self.clone();
 
         actix::spawn(async move {
             let dialog_result = rx.await.expect("Receiving failed");
@@ -355,7 +354,6 @@ impl AppClient {
                 if let Err(err) = sv_client_actor.send(DeleteSensor { sensor_id }).await {
                     log::error!("Failed to send SensorDelete for {sensor_id}: {err}");
                 }
-                let _ = app.next_sensor().await;
             }
         });
 
@@ -492,7 +490,6 @@ impl AppClient {
 
         let ui_state_actor = self.ui_state_actor.clone();
         let sv_client_actor = self.sv_client_actor.clone();
-        let app = self.clone();
 
         actix::spawn(async move {
             let dialog_result = rx.await.expect("Receiving failed");
@@ -507,7 +504,6 @@ impl AppClient {
                 {
                     log::error!("Failed to send MetricDelete for {sensor_id}/{metric_id}: {err}");
                 }
-                let _ = app.next_metric().await;
             }
         });
 
@@ -679,6 +675,7 @@ impl Handler<SensorStateEvent> for AppClient {
                         if ui_state.current_metric.is_none() {
                             let _ = app.next_metric().await;
                         }
+                        app.rerender().await;
                     }
                     .into_actor(self),
                 );
@@ -701,6 +698,7 @@ impl Handler<SensorStateEvent> for AppClient {
                                 timestamp,
                             })
                             .await;
+                        app.rerender().await;
                     }
                     .into_actor(self),
                 );
@@ -713,6 +711,7 @@ impl Handler<SensorStateEvent> for AppClient {
                         let _ = app.ui_state_actor.send(DropSensor(sensor_id)).await;
                         let _ = app.next_sensor().await;
                         let _ = app.next_metric().await;
+                        app.rerender().await;
                     }
                     .into_actor(self),
                 );
@@ -730,6 +729,7 @@ impl Handler<SensorStateEvent> for AppClient {
                             .send(DropMetric(sensor_id, metric_id))
                             .await;
                         let _ = app.next_metric().await;
+                        app.rerender().await;
                     }
                     .into_actor(self),
                 );
@@ -737,13 +737,6 @@ impl Handler<SensorStateEvent> for AppClient {
 
             _ => {}
         }
-
-        ctx.spawn(
-            async move {
-                app.rerender().await;
-            }
-            .into_actor(self),
-        );
     }
 }
 
