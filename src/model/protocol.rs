@@ -117,3 +117,12 @@ pub struct PingRequest {
 pub struct PingResponse {
     pub answer: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ErrorResponse {
+    #[serde(rename = "errorMessage")]
+    pub message: String,
+
+    #[serde(rename = "errorcode")]
+    pub code: i32,
+}

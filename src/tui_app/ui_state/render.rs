@@ -4,9 +4,10 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::symbols;
 use ratatui::symbols::border;
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
     Axis, Block, BorderType, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph, Tabs,
+    Wrap,
 };
 use ratatui::Frame;
 
@@ -148,24 +149,50 @@ fn render_state(frame: &mut Frame, sensors: &Sensors, ui_state: &UIState) {
 fn render_sensor(frame: &mut Frame, sensor: &Sensor<Metric>, ui_state: &UIState) {
     let metrics_count = sensor.metrics.len();
 
-    let sensor_area = {
+    // Cut boundaries and Tabs
+    let area = {
         let vbox = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(2),
                 Constraint::Fill(1),
-                Constraint::Length(3),
+                Constraint::Length(1),
             ])
             .split(frame.area());
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Fill(1),
-                Constraint::Length(2),
+                Constraint::Length(1),
             ])
             .split(vbox[1])[1]
     };
+
+    let vbox = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Fill(1),
+            Constraint::Length(ui_state.errors.len() as u16),
+        ])
+        .split(area);
+
+    if !ui_state.errors.is_empty() {
+        let error_log = ui_state.errors.iter().fold(String::default(), |a, b| a + "\n" + b).trim().to_string();
+        let errors_log = Paragraph::new(Text::from(error_log))
+            .themed(ErrorLog)
+            .wrap(Wrap { trim: true });
+        frame.render_widget(errors_log, vbox[1]);
+    }
+
+    let sensor_area = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Fill(1),
+            Constraint::Length(2),
+        ])
+        .split(vbox[0])[1];
 
     let vbox_layout = Layout::default()
         .direction(Direction::Vertical)

@@ -44,6 +44,13 @@ pub struct DropSensor(pub SensorId);
 #[rtype(result = "()")]
 pub struct DropMetric(pub SensorId, pub MetricId);
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct AppendError{
+    pub message: String,
+    pub code: i32,
+}
+
 impl Handler<GetUIStateSnapshot> for UIState {
     type Result = MessageResult<GetUIStateSnapshot>;
 
@@ -188,5 +195,20 @@ impl Handler<HandleKeyEvent> for UIState {
         } else {
             false
         }
+    }
+}
+
+impl Handler<AppendError> for UIState {
+    type Result = ();
+
+    fn handle(
+        &mut self,
+        AppendError{message, code}: AppendError,
+        _: &mut Self::Context,
+    ) -> Self::Result {
+        if self.errors.len() == 3 {
+            self.errors.pop_front();
+        }
+        self.errors.push_back(format!("Error #{}: {}", code, message));
     }
 }

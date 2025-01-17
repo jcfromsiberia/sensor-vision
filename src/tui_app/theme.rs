@@ -97,6 +97,9 @@ pub enum UIElement {
 
     #[strum(props(bg_colors = "27,44", fg_colors = "15,0"))]
     DialogTextInputFocused,
+
+    #[strum(props(fg_colors = "9,1"))]
+    ErrorLog,
 }
 
 impl UIElement {

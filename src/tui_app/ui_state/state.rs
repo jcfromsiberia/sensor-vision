@@ -2,7 +2,7 @@ use actix::{Actor, Context};
 
 use chrono::{DateTime, Utc};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::model::{MetricId, SensorId};
@@ -14,6 +14,8 @@ pub struct UIState {
     pub current_metric: Option<(usize, MetricId)>,
 
     pub modal_dialog: Option<ModalDialog>,
+
+    pub errors: VecDeque<String>,
 
     pub livedata: HashMap<(SensorId, MetricId), MetricLivedataWindow>,
 }

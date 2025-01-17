@@ -11,7 +11,7 @@ use crate::client::state::MqttScheme;
 use crate::client::mqtt::MqttEvent;
 use crate::model::sensor::{LinkedMetric, Metric, Sensor};
 use crate::model::{MetricId, MqttId, SensorId};
-use crate::model::protocol::{CreateMetricResponsePayload, MetricValue, MetricsArrayResponse, PushMetricValueResponse};
+use crate::model::protocol::{CreateMetricResponsePayload, ErrorResponse, MetricValue, MetricsArrayResponse, PushMetricValueResponse};
 
 #[derive(Debug, Clone, Message)]
 #[rtype(result = "()")]
@@ -66,6 +66,11 @@ pub enum SensorStateEvent {
         value: MetricValue,
         timestamp: u64,
     },
+
+    Error {
+        message: String,
+        code: i32,
+    }
 }
 
 #[derive(Message)]
@@ -362,11 +367,18 @@ impl Handler<MqttEvent> for SensorsStateActor {
             use MqttScheme::*;
             let (_, response_pattern, _) = scheme.get_templates();
             if response_pattern != pattern {
-                log::error!(
-                    "Error in topic '{}', message '{}'",
-                    msg.topic,
-                    msg.message,
-                );
+                if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&msg.message) {
+                    self.emit_event(SensorStateEvent::Error {
+                        message: error_response.message,
+                        code: error_response.code,
+                    });
+                } else {
+                    log::error!(
+                        "Error in topic '{}', message '{}'",
+                        msg.topic,
+                        msg.message,
+                    );
+                }
                 return;
             };
 

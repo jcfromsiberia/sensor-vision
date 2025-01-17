@@ -735,6 +735,20 @@ impl Handler<SensorStateEvent> for AppClient {
                 );
             }
 
+            Error {
+                message, 
+                code,
+            } => {
+                let ui_state_actor = self.ui_state_actor.clone();
+                ctx.spawn(
+                    async move {
+                        let _ = ui_state_actor.send(AppendError{message, code}).await;
+                        app.rerender().await;
+                    }
+                    .into_actor(self),
+                );
+            }
+
             _ => {}
         }
     }
