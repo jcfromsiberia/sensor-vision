@@ -85,7 +85,7 @@ pub enum ValueUnit {
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, EnumIter)]
 pub enum ValueType {
-    #[serde(rename = "boolean")]
+    #[serde(rename = "bool")]
     Boolean,
 
     #[serde(rename = "double")]
