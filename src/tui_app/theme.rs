@@ -1,11 +1,11 @@
 use ratatui::prelude::Stylize;
-
-use strum_macros;
-// bring the trait into scope
-use strum::EnumProperty;
-
 use ratatui::style::{Color, Styled};
+
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use strum::EnumProperty;
+use strum_macros;
+
 use crate::model::sensor::{ValueType, ValueUnit};
 
 pub static THEME_INDEX: AtomicUsize = AtomicUsize::new(0);

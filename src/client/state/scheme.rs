@@ -1,20 +1,79 @@
 use regex::Regex;
 
-use strum::EnumIter;
+use strum::{EnumIter, EnumProperty};
 
 use crate::model::{MetricId, MqttId, SensorId};
 
-#[derive(Clone, Copy, Debug, EnumIter)]
+#[derive(Clone, Copy, Debug, EnumIter, EnumProperty)]
 pub enum MqttScheme {
+    #[strum(props(
+        path = "sensor/list",
+        response = "inventory/inbox",
+        error = "inventory/error/inbox"
+    ))]
     SensorList,
+
+    #[strum(props(
+        path = "sensor/create",
+        response = "sensor/inbox",
+        error = "sensor/error/inbox"
+    ))]
     SensorCreate,
+
+    #[strum(props(
+        path = "sensor/:mqttid:/update",
+        response = "sensor/:mqttid:/update/info/inbox",
+        error = "sensor/:mqttid:/update/error/inbox"
+    ))]
     SensorUpdate(SensorId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/delete",
+        response = "sensor/:mqttid:/delete/info/inbox",
+        error = "sensor/:mqttid:/delete/error/inbox"
+    ))]
     SensorDelete(SensorId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/metric/:mqttid:/inventory",
+        response = "sensor/:mqttid:/metric/:mqttid:/inventory/inbox",
+        error = "sensor/:mqttid:/metric/:mqttid:/inventory/error/inbox"
+    ))]
     MetricDescribe(SensorId, MetricId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/metric/create",
+        response = "sensor/:mqttid:/metric/inbox",
+        error = "sensor/:mqttid:/metric/error/inbox"
+    ))]
     MetricCreate(SensorId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/metric/update",
+        response = "sensor/:mqttid:/metric/update/info/inbox",
+        error = "sensor/:mqttid:/metric/update/error/inbox"
+    ))]
     MetricUpdate(SensorId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/metric/delete",
+        response = "sensor/:mqttid:/metric/delete/info/inbox",
+        error = "sensor/:mqttid:/metric/error/inbox"
+    ))]
     MetricDelete(SensorId),
+
+    #[strum(props(
+        path = "sensor/:mqttid:/metric/pushValues",
+        response = "sensor/:mqttid:/info/inbox",
+        error = "sensor/:mqttid:/error/inbox"
+    ))]
     PushValues(SensorId),
+
+    #[strum(props(
+        path = "ping",
+        response = "ping/info/inbox",
+        error = "ping/error/inbox"
+    ))]
     Ping,
 }
 
@@ -29,47 +88,11 @@ macro_rules! to_mqtt_topic {
 
 impl MqttScheme {
     pub fn get_templates(&self) -> (&'static str, &'static str, &'static str) {
-        use MqttScheme::*;
-        match self {
-            SensorList => ("sensor/list", "inventory/inbox", "inventory/error/inbox"),
-            SensorCreate => ("sensor/create", "sensor/inbox", "sensor/error/inbox"),
-            SensorUpdate(..) => (
-                "sensor/:mqttid:/update",
-                "sensor/:mqttid:/update/info/inbox",
-                "sensor/:mqttid:/update/error/inbox",
-            ),
-            SensorDelete(..) => (
-                "sensor/:mqttid:/delete",
-                "sensor/:mqttid:/delete/info/inbox",
-                "sensor/:mqttid:/delete/error/inbox",
-            ),
-            MetricDescribe(..) => (
-                "sensor/:mqttid:/metric/:mqttid:/inventory",
-                "sensor/:mqttid:/metric/:mqttid:/inventory/inbox",
-                "sensor/:mqttid:/metric/:mqttid:/inventory/error/inbox",
-            ),
-            MetricCreate(..) => (
-                "sensor/:mqttid:/metric/create",
-                "sensor/:mqttid:/metric/inbox",
-                "sensor/:mqttid:/metric/error/inbox",
-            ),
-            MetricUpdate(..) => (
-                "sensor/:mqttid:/metric/update",
-                "sensor/:mqttid:/metric/update/info/inbox",
-                "sensor/:mqttid:/metric/update/error/inbox",
-            ),
-            MetricDelete(..) => (
-                "sensor/:mqttid:/metric/delete",
-                "sensor/:mqttid:/metric/delete/info/inbox",
-                "sensor/:mqttid:/metric/error/inbox",
-            ),
-            PushValues(..) => (
-                "sensor/:mqttid:/metric/pushValues",
-                "sensor/:mqttid:/info/inbox",
-                "sensor/:mqttid:/error/inbox",
-            ),
-            Ping => ("ping", "ping/info/inbox", "ping/error/inbox"),
-        }
+        (
+            self.get_str("path").unwrap(),
+            self.get_str("response").unwrap(),
+            self.get_str("error").unwrap(),
+        )
     }
 
     pub fn get_topics(&self) -> (String, String, String) {
