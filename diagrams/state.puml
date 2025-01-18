@@ -1,0 +1,44 @@
+@startuml
+
+!theme toy
+
+skinparam linetype ortho
+
+frame SensorsState {
+    entity Metric {
+        * metric_id: uuid <<PK>>
+        * sensor_id: uuid <<FK>>
+        --
+        * name: string
+        value_unit: number
+        value_type: number
+        value_annotation: string
+    }
+
+    entity Sensor {
+        * sensor_id: uuid <<PK>>
+        --
+        * name: string
+    }
+
+    Metric }o--|| Sensor
+}
+
+frame "TUI App UIState" {
+    entity Selection {
+        sensor_id: uuid <<FK>>
+        metric_id: uuid <<FK>>
+    }
+
+    entity Livedata {
+        * metric_id: uuid <<FK>>
+        --
+        * value: float
+        * timestamp: datetime
+    }
+
+    Livedata }o--|| Metric
+    Selection }o--|| Metric
+}
+
+@enduml

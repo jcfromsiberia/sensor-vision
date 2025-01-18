@@ -1,0 +1,74 @@
+@startuml
+
+!theme toy
+
+cloud MqttBroker as broker
+folder "TeamViewer IoT Agent" {
+    node AgentMqttClient
+}
+
+AgentMqttClient ..> broker: Listen for Requests
+AgentMqttClient --> broker: Push Events
+AgentMqttClient --> broker: Push Responses
+
+folder SensorVision {
+    package Client {
+        node MqttActor as mqtt_client {
+            interface "mqtt::AsyncClient" as async_client
+        }
+
+        node MqttListener as mqtt_listener {
+            interface "mqtt::AsyncClient" as async_listener
+        }
+
+        node "SensorsState Actor" as state_actor {
+            database Sensors {
+                database Metrics
+            }
+            component "MqttEvents Handler" as mqtt_events_handler
+            interface StateEvents as state_events
+        }
+
+        node "SensorVision Client" as sv_client {
+            component "StateEvents Handler" as state_events_handler
+            interface "StateEvents Forwarder" as events_forwarder
+            interface "Requests interface" as requests_interface
+        }
+
+        mqtt_events_handler ..> mqtt_listener: Listen for Mqtt Events / Responses
+        mqtt_events_handler -> Sensors: Update state
+        mqtt_events_handler --> state_events: Emit Events
+        state_events_handler ..> state_events: Listen for State Events
+        requests_interface --> mqtt_client: Send Mqtt Requests
+        mqtt_client --> broker: Send Mqtt Messages
+        mqtt_listener ...> broker: Listen for Messages (Events & Responses)
+        mqtt_listener --> mqtt_events_handler: Forward Mqtt Events / Responses
+        events_forwarder ...> state_events: Listen for State Events
+        state_events_handler --> mqtt_client: Send additional requests
+    }
+
+    package TUIApp {
+        node "UIState Actor" as ui_state {
+            database UIState {
+                database LastMetricLivedata
+            }
+        }
+
+        node App {
+            component "StateEvents Handler" as app_state_events_handler
+            component "CrosstermEvents Handler" as tui_events_handler
+            component "Renderer" as tui_renderer
+        }
+
+        app_state_events_handler ..> events_forwarder: Listen for State Events
+        tui_events_handler -> requests_interface: Send Requests
+        tui_events_handler -> ui_state: Update State
+        app_state_events_handler --> ui_state: Update State
+        app_state_events_handler -> tui_renderer: Trigger rendering
+        tui_events_handler --> tui_renderer: Trigger Rendering
+        tui_renderer ---> ui_state: Get state snapshot
+        tui_renderer ---> sv_client: Get state snapshot
+    }
+}
+
+@enduml
