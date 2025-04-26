@@ -58,7 +58,7 @@ pub enum MqttScheme {
     #[strum(props(
         path = "sensor/:mqttid:/metric/delete",
         response = "sensor/:mqttid:/metric/delete/info/inbox",
-        error = "sensor/:mqttid:/metric/error/inbox"
+        error = "sensor/:mqttid:/metric/delete/error/inbox"
     ))]
     MetricDelete(SensorId),
 
