@@ -19,7 +19,7 @@ Currently, the only way to get binaries is building the app on the host machine.
 ## Dependencies
 
 ---
-* [rustc+cargo](https://github.com/rust-lang/cargo/) >= 1.82
+* [rustc+cargo](https://github.com/rust-lang/cargo/) >= 1.85.0 (for Rust 2024 edition)
 * librust-openssl-dev >= 0.10
 
 ## Building
